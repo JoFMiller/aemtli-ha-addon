@@ -1,8 +1,0 @@
-# Basis-Image je Architektur. ghcr.io/hassio-addons/base bringt s6-overlay v3,
-# bashio und tempio mit (nginx wird im Dockerfile via apk nachinstalliert).
-build_from:
-  aarch64: ghcr.io/hassio-addons/base:18.2.0
-  amd64: ghcr.io/hassio-addons/base:18.2.0
-  armv7: ghcr.io/hassio-addons/base:18.2.0
-  armhf: ghcr.io/hassio-addons/base:18.2.0
-  i386: ghcr.io/hassio-addons/base:18.2.0

@@ -17,8 +17,7 @@ siehe **[DOCS.md](DOCS.md)**.
 ```
 aemtli/
 ├─ config.yaml            Add-on-Manifest (ingress + Direkt-Port, Optionen)
-├─ build.yaml             Basis-Image je Architektur
-├─ Dockerfile             nginx auf hassio-addons/base
+├─ Dockerfile             nginx auf hassio-addons/base (Basis-Image via ARG BUILD_FROM)
 ├─ DOCS.md / README.md
 ├─ icon.png / logo.png
 └─ rootfs/
