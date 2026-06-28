@@ -8,10 +8,11 @@ bashio::log.level "$(bashio::config 'log_level')"
 
 declare dns_host grocy_upstream grocy_host direct_server certfile keyfile
 
-dns_host=$(bashio::dns.host)
+# API-Aufruf absturzsicher: schlägt er fehl, Fallback statt Container-Abbruch.
+dns_host="$(bashio::dns.host 2>/dev/null)" || dns_host=""
 if [[ -z "${dns_host}" ]]; then
     dns_host="172.30.32.3"                          # HA-DNS-Fallback
-    bashio::log.warning "DNS-Host leer – nutze Fallback ${dns_host}"
+    bashio::log.warning "DNS-Host nicht ermittelbar – nutze Fallback ${dns_host}"
 fi
 
 grocy_upstream=$(bashio::config 'grocy_upstream')
