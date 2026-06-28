@@ -1,0 +1,1 @@
+# nginx startet erst nach init-nginx (Inhalt wird von s6 nur per Existenz ausgewertet)

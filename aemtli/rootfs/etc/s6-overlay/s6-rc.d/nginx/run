@@ -1,0 +1,7 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Ämtli – startet nginx (Vordergrund, von s6 überwacht)
+# ==============================================================================
+bashio::log.info "nginx startet…"
+exec nginx

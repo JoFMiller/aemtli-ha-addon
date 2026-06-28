@@ -1,0 +1,8 @@
+# Zeilenenden vereinheitlichen: alle Textdateien als LF auschecken.
+# Wichtig für die s6-/Shell-Skripte und nginx-Configs (CRLF würde sie brechen).
+* text=auto eol=lf
+
+# Binärdateien unangetastet lassen.
+*.png binary
+*.jpg binary
+*.ico binary

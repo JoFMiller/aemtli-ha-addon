@@ -1,0 +1,83 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Ämtli – rendert die nginx-Konfiguration aus den Add-on-Optionen
+# ==============================================================================
+
+bashio::log.level "$(bashio::config 'log_level')"
+
+declare dns_host grocy_upstream grocy_host direct_server certfile keyfile
+
+dns_host=$(bashio::dns.host)
+if [[ -z "${dns_host}" ]]; then
+    dns_host="172.30.32.3"                          # HA-DNS-Fallback
+    bashio::log.warning "DNS-Host leer – nutze Fallback ${dns_host}"
+fi
+
+grocy_upstream=$(bashio::config 'grocy_upstream')
+grocy_upstream="${grocy_upstream%/}"               # evtl. Slash am Ende entfernen
+# Host (für Host-Header / TLS-SNI) aus der Upstream-URL extrahieren
+grocy_host="${grocy_upstream#*://}"                # Schema entfernen
+grocy_host="${grocy_host%%/*}"                     # Pfad entfernen
+grocy_host="${grocy_host%%:*}"                     # Port entfernen
+
+bashio::log.info "Grocy-Upstream: ${grocy_upstream} (Host: ${grocy_host})"
+
+# Temp-/Arbeitsverzeichnisse für nginx anlegen
+mkdir -p \
+    /tmp/nginx/body /tmp/nginx/proxy /tmp/nginx/fastcgi /tmp/nginx/scgi /tmp/nginx/uwsgi \
+    /var/log/nginx /var/lib/nginx
+
+# Direkt-Port (installierbare PWA): mit oder ohne SSL.
+if bashio::config.true 'ssl'; then
+    certfile=$(bashio::config 'certfile')
+    keyfile=$(bashio::config 'keyfile')
+    if ! bashio::fs.file_exists "/ssl/${certfile}" || ! bashio::fs.file_exists "/ssl/${keyfile}"; then
+        bashio::log.warning "SSL ist aktiv, aber /ssl/${certfile} oder /ssl/${keyfile} fehlt."
+        bashio::log.warning "Der Direkt-Port (PWA) startet ohne gültiges Zertifikat evtl. nicht."
+    fi
+    direct_server="listen 8080 ssl;
+    ssl_certificate /ssl/${certfile};
+    ssl_certificate_key /ssl/${keyfile};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:2m;
+    ssl_session_timeout 1h;"
+    bashio::log.info "Direkt-Port 8080: HTTPS (Zertifikat /ssl/${certfile})"
+else
+    direct_server="listen 8080;"
+    bashio::log.info "Direkt-Port 8080: HTTP (ohne SSL) – PWA-Installation braucht HTTPS davor"
+fi
+
+cat > /etc/nginx/aemtli.conf <<EOF
+resolver ${dns_host} ipv6=off valid=30s;
+
+# --- Ingress (über Home Assistant, nur Supervisor-Subnetz) -------------------
+server {
+    listen 8099;
+    allow 172.30.32.0/23;
+    deny all;
+
+    root /var/www;
+    index index.html;
+
+    set \$grocy_upstream "${grocy_upstream}";
+    set \$grocy_host "${grocy_host}";
+
+    include /etc/nginx/includes/locations.conf;
+}
+
+# --- Direkt-Port (eigenständige, installierbare PWA) -------------------------
+server {
+    ${direct_server}
+
+    root /var/www;
+    index index.html;
+
+    set \$grocy_upstream "${grocy_upstream}";
+    set \$grocy_host "${grocy_host}";
+
+    include /etc/nginx/includes/locations.conf;
+}
+EOF
+
+bashio::log.info "nginx-Konfiguration erstellt (/etc/nginx/aemtli.conf)."
