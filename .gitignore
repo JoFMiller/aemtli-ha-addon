@@ -1,0 +1,3 @@
+# Claude-Code-Arbeitsdateien gehören nicht ins Add-on-Repo
+.claude/
+.mcp.json

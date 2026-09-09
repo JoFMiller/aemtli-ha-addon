@@ -6,7 +6,7 @@
 
 bashio::log.level "$(bashio::config 'log_level')"
 
-declare dns_host grocy_upstream grocy_host direct_server certfile keyfile
+declare dns_host grocy_upstream grocy_host direct_server certfile keyfile addon_version
 
 # API-Aufruf absturzsicher: schlägt er fehl, Fallback statt Container-Abbruch.
 dns_host="$(bashio::dns.host 2>/dev/null)" || dns_host=""
@@ -29,6 +29,16 @@ mkdir -p \
     /tmp/nginx/body /tmp/nginx/proxy /tmp/nginx/fastcgi /tmp/nginx/scgi /tmp/nginx/uwsgi \
     /var/log/nginx /var/lib/nginx
 
+# App-Version in die Laufzeit-Konfiguration schreiben (Anzeige in der Diagnose).
+addon_version="$(bashio::addon.version 2>/dev/null)" || addon_version=""
+if [[ -n "${addon_version}" ]]; then
+    cat > /var/www/config.js <<EOF
+/* Laufzeit-Konfiguration – von init-nginx aus der Add-on-Version erzeugt. */
+window.AEMTLI = { proxied: true, version: "${addon_version}" };
+EOF
+    bashio::log.info "App-Version: ${addon_version}"
+fi
+
 # Direkt-Port (installierbare PWA): mit oder ohne SSL.
 if bashio::config.true 'ssl'; then
     certfile=$(bashio::config 'certfile')
@@ -46,7 +56,7 @@ if bashio::config.true 'ssl'; then
     bashio::log.info "Direkt-Port 8080: HTTPS (Zertifikat /ssl/${certfile})"
 else
     direct_server="listen 8080;"
-    bashio::log.info "Direkt-Port 8080: HTTP (ohne SSL) – PWA-Installation braucht HTTPS davor"
+    bashio::log.info "Direkt-Port 8080: HTTP (ohne SSL) – TLS übernimmt z. B. Tailscale (services/serve)"
 fi
 
 cat > /etc/nginx/aemtli.conf <<EOF

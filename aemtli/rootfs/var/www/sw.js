@@ -1,11 +1,12 @@
-/* Service Worker – App-Shell offline verfügbar, aber online IMMER frisch.
+/* Service Worker – App-Shell offline verfügbar, online IMMER frisch.
    Strategie: network-first für eigene Assets (Cache nur als Offline-Fallback),
-   damit geänderte index.html/app.js sofort ankommen (kein Cache-Bump nötig).
-   Der Grocy-Proxy (/grocy/) und fremde Origins werden nicht angefasst. */
-const CACHE = "aemtli-v3";
+   damit geänderte index.html/app.js sofort ankommen. Fehlerantworten werden nie
+   gecacht. Der Grocy-Proxy (/grocy/) und fremde Origins werden nicht angefasst. */
+const CACHE = "aemtli-v4";
 const SHELL = [
   "./",
   "./index.html",
+  "./boot.js",
   "./app.js",
   "./config.js",
   "./manifest.webmanifest",
@@ -15,7 +16,10 @@ const SHELL = [
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      // tolerant: ein fehlendes Icon darf die Installation nicht verhindern
+      .then((c) => Promise.allSettled(SHELL.map((u) => c.add(u))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -34,7 +38,6 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(req.url);
 
   // Grocy-API-Proxy (/grocy/) niemals cachen – dynamisch + mit Auth.
-  // includes() statt startsWith(), damit es auch unter einem Basispfad greift.
   if (url.pathname.includes("/grocy/")) return;
 
   // Fremde Origin: nicht anfassen, direkt ans Netz.
@@ -45,25 +48,31 @@ self.addEventListener("fetch", (e) => {
     e.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put("./index.html", copy));
+          if (res && res.ok) {
+            const copy = res.clone();
+            e.waitUntil(caches.open(CACHE).then((c) => c.put("./index.html", copy)));
+          }
           return res;
         })
-        .catch(() => caches.match("./index.html").then((c) => c || caches.match("./")))
+        .catch(() =>
+          caches.match("./index.html")
+            .then((c) => c || caches.match("./"))
+            .then((c) => c || Response.error())
+        )
     );
     return;
   }
 
-  // Eigene Assets: network-first, Cache als Fallback (offline / Server weg).
+  // Eigene Assets: network-first (mit Revalidierung), Cache als Fallback.
   e.respondWith(
-    fetch(req)
+    fetch(req, { cache: "no-cache" })
       .then((res) => {
         if (res && res.ok) {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy));
+          e.waitUntil(caches.open(CACHE).then((c) => c.put(req, copy)));
         }
         return res;
       })
-      .catch(() => caches.match(req))
+      .catch(() => caches.match(req).then((c) => c || Response.error()))
   );
 });

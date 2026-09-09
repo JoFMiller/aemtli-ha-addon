@@ -2,7 +2,7 @@
 # Liefert die statische PWA aus und proxyt server-seitig das HA-Grocy-Add-on
 # über das interne hassio-Netz (kein Direktport zum Host, kein Tailscale-Umweg).
 name: "Ämtli"
-version: "1.0.2"
+version: "2.0.0"
 slug: "aemtli"
 description: "Schlanke, installierbare PWA für Grocy – Einkaufszettel & Hausarbeiten"
 # KEIN 'image:' -> Supervisor baut das Dockerfile lokal.

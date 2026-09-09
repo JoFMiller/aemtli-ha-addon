@@ -5,9 +5,9 @@
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#EAF0E7",
-  "theme_color": "#1B2620",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#F2F6EF",
+  "theme_color": "#F2F6EF",
   "lang": "de",
   "categories": ["lifestyle", "productivity", "utilities"],
   "icons": [
@@ -17,7 +17,9 @@
     { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
-    { "name": "Einkauf", "url": "./?tab=shopping" },
-    { "name": "Aufgaben", "url": "./?tab=chores" }
+    { "name": "Einkauf", "short_name": "Einkauf", "url": "./?tab=shopping",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Aufgaben", "short_name": "Aufgaben", "url": "./?tab=chores",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }
