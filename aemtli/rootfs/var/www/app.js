@@ -256,7 +256,10 @@ async function api(path, { method = "GET", body, key = CFG.key, base = CFG.url, 
       fromGrocy: isJson && !proxyDown,
       proxyDown,
       unclear: mutation && [502, 503, 504].includes(res.status),
-      haAuth: !isJson && (res.status === 401 || res.status === 403) && (UNDER_INGRESS || /text\/html/i.test(ct)),
+      // HA-Ingress-Session abgelaufen: nur unter Ingress und nur, wenn HA selbst antwortet
+      // („401: Unauthorized“). Grocy liefert bei fehlendem/ungültigem Key 401 mit LEEREM
+      // text/html-Body (verifiziert an Grocy 4.6) – das ist ein Schlüsselproblem.
+      haAuth: UNDER_INGRESS && !isJson && (res.status === 401 || res.status === 403) && /unauthori[sz]ed|home assistant/i.test(txt),
       bodyHint: isJson ? "" : txt.slice(0, 120),
     });
     DIAG.push({ kind: "http", status: res.status, path, msg: err.detail || err.bodyHint });

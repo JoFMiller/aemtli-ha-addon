@@ -127,18 +127,29 @@ Voraussetzung: Tailscale-Add-on **≥ 0.29.0** (August 2026), HTTPS im Tailnet a
 Services gelten für **Mitglieder des Tailnets**. Wer die HA-Box nur per
 Node-Sharing aus einem anderen Tailnet sieht, nutzt Weg C.
 
-### C) Fallback: Node-Serve auf einem Zweitport
-Braucht das Add-on **Advanced SSH & Web Terminal** mit ausgeschaltetem Protection
-Mode. Im Terminal (Containername ggf. mit `docker ps | grep tailscale` prüfen):
+### C) Für geteilte Geräte: `https://<ha-box>.<tailnet>.ts.net/aemtli/`
+Tailscale Services sind nur für Mitglieder des Tailnets sichtbar. Wer die HA-Box per
+**Node-Sharing** aus einem anderen Tailnet sieht, erreicht Ämtli über den Namen der
+Box. Dafür einmalig im Add-on **Advanced SSH & Web Terminal** (Protection Mode aus,
+`ssh.password` gesetzt) im Web-Terminal:
 ```bash
-docker exec -it addon_a0d7b954_tailscale /opt/tailscale serve --bg --https=8443 http://127.0.0.1:8080
-docker exec -it addon_a0d7b954_tailscale /opt/tailscale serve status
+docker ps --format '{{.Names}}' | grep tailscale        # Containername, z. B. app_a0d7b954_tailscale
+docker exec -it app_a0d7b954_tailscale /opt/tailscale serve --bg --https=443 --set-path=/aemtli https+insecure://127.0.0.1:8099
+docker exec -it app_a0d7b954_tailscale /opt/tailscale serve status
 ```
-→ `https://<ha-box>.<tailnet>.ts.net:8443/` (persistiert, überlebt Neustarts).
-Für per Sharing zugreifende Nutzer zusätzlich eine ACL-Regel mit
-`src: ["autogroup:shared"]` auf den Port. Ein Pfad wie `/aemtli/` auf Port 443
-kollidiert mit `share_homeassistant: serve` und ist nur möglich, wenn das
-deaktiviert ist (Tailscale strippt den Pfad-Präfix, nginx bleibt auf Root).
+`8099` ist der **Host-Port**, der dem Ämtli-Port `8080/tcp` zugewiesen wurde (bei dir
+kann er anders heißen). `https+insecure://` erlaubt es, `ssl: true` im Ämtli-Add-on zu
+lassen; bei `ssl: false` stattdessen `http://127.0.0.1:<port>`.
+
+Die Einstellung liegt im Tailscale-State (`/data/tailscaled.state`) und überlebt
+Neustarts und Updates beider Add-ons; sie verschwindet nur beim Neuinstallieren des
+Tailscale-Add-ons oder nach `tailscale serve reset`. Voraussetzungen: die Box ist
+getaggt, in der Policy des besitzenden Tailnets erlaubt eine Regel den Gast
+(`src: ["autogroup:shared"]` oder sein Login) auf `tag:…:443`, und
+`share_homeassistant` bleibt **disabled** – es belegt Port 443 im Vordergrund und
+verdeckt jeden Pfad dort (dann `share_on_port: 8443` für HA wählen). Tailscale
+strippt den Pfad-Präfix, nginx bleibt auf Root; Ämtli leitet `…/aemtli` ohne
+Schluss-Slash selbst um.
 
 > PWA-Installation braucht einen **secure context** (vertrauenswürdiges HTTPS).
 > Ein Self-Signed-Zertifikat auf dem Direkt-Port genügt zum Benutzen, aber nicht zum
