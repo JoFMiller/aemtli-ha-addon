@@ -19,7 +19,12 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" href="icons/icon-192.png" sizes="192x192" />
 
-  <!-- Theme + Trailing-Slash-Schutz, vor dem ersten Paint (extern wegen CSP) -->
+  <!-- Trailing-Slash-Schutz MUSS inline sein: ohne Schluss-Slash (…/aemtli) lösen alle
+       relativen Dateien eine Ebene zu hoch auf, auch ein externes boot.js. Der Hash dieses
+       Skripts steht in nginx/includes/security-headers.conf (script-src 'sha256-…'); bei
+       jeder Änderung neu berechnen: sha256 base64 des Textes zwischen den Script-Tags. -->
+  <script>if(!/\/$/.test(location.pathname)&&!/\.[a-z0-9]{1,5}$/i.test(location.pathname))location.replace(location.pathname+"/"+location.search+location.hash);</script>
+  <!-- Theme + Start-Wächter, vor dem ersten Paint (extern wegen CSP) -->
   <script src="boot.js"></script>
 
   <style>
