@@ -18,6 +18,7 @@
    • Kein Bulk-Endpunkt fürs Buchen; Zeile für Zeile, sequenziell.
    ===================================================================== */
 "use strict";
+window.__aemtliLoaded = true;   // für den Start-Wächter in boot.js
 
 /* ------------------------------------------------------------ Umgebung */
 const AEMTLI = (typeof window !== "undefined" && window.AEMTLI) || {};
@@ -1589,4 +1590,4 @@ function boot() {
   reflectOnline();
   registerSW();
 }
-try { boot(); } catch (e) { DIAG.push({ kind: "js", msg: "boot: " + String(e && e.message || e) }); fatal(String(e && e.message || e)); }
+try { boot(); window.__aemtliBooted = true; } catch (e) { DIAG.push({ kind: "js", msg: "boot: " + String(e && e.message || e) }); fatal(String(e && e.message || e)); }
