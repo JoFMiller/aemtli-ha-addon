@@ -38,8 +38,8 @@ self.addEventListener("fetch", (e) => {
 
   const url = new URL(req.url);
 
-  // Grocy-API-Proxy (/grocy/) niemals cachen – dynamisch + mit Auth.
-  if (url.pathname.includes("/grocy/")) return;
+  // Grocy-API-Proxy (/grocy/) und Open-Food-Facts-Proxy (/off/) niemals cachen – dynamisch + mit Auth.
+  if (url.pathname.includes("/grocy/") || url.pathname.includes("/off/")) return;
 
   // Fremde Origin: nicht anfassen, direkt ans Netz.
   if (url.origin !== self.location.origin) return;

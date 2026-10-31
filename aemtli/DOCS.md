@@ -42,6 +42,9 @@ Content, kein CORS, kein Tailscale-Umweg für die Grocy-Anbindung.
   Haltbarkeit nach dem Datum („Trotzdem einsortieren“ geht immer).
   Anlegen braucht in Grocy das Recht **„Stammdaten bearbeiten“**; ohne dieses
   Recht bietet Ämtli nur das Verknüpfen an.
+- **Sheets zuziehen (2.1.1):** Jedes Sheet lässt sich am Griff oben nach unten
+  wegwischen. Das „Seite neu laden“ des Browsers beim Herunterwischen ist
+  abgeschaltet – aktualisiert wird über den Knopf oben rechts.
 - **Vorschläge:** Unter der Eingabezeile erscheint eine leise Karte mit maximal
   drei Produkten, die laut Kaufrhythmus (mindestens drei Käufe in 120 Tagen,
   überfällig ab dem 1,2-Fachen des üblichen Abstands) wohl fehlen, dazu Produkte

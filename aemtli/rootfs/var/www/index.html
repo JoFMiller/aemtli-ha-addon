@@ -80,12 +80,15 @@
 
     /* ---- Basis ---- */
     *{box-sizing:border-box;}
-    html{font-size:100%;}
+    /* Kein Pull-to-Refresh des Browsers: die App hat einen eigenen Aktualisieren-Knopf, und beim
+       Herunterwischen eines Sheets lud Chrome sonst die Seite neu. Muss auf html stehen – von
+       body aus wird es nicht (mehr) an den Viewport weitergereicht. */
+    html{font-size:100%; overscroll-behavior-y:none;}
     html,body{margin:0;padding:0;}
     body{
       font-family:var(--font); font-size:1rem; line-height:1.4; color:var(--ink); background:var(--bg);
       min-height:100vh; min-height:100dvh; -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-      overscroll-behavior-y:contain;
+      overscroll-behavior-y:none;
     }
     button,input,select{font-family:inherit; font-size:inherit; color:inherit;}
     button{cursor:pointer;}
@@ -284,10 +287,14 @@
     /* ---- Sheet ---- */
     .backdrop{position:fixed; inset:0; background:rgba(10,16,12,.45); z-index:60; display:none;}
     .backdrop.show{display:block;}
-    .sheet{position:fixed; left:50%; bottom:0; transform:translateX(-50%); width:100%; max-width:680px; max-height:88vh; max-height:88dvh; overflow:auto; z-index:61; background:var(--surface); border-radius:22px 22px 0 0; box-shadow:0 -8px 30px rgba(0,0,0,.2); padding:8px 16px calc(16px + var(--safe-bot)); display:none;}
+    .sheet{position:fixed; left:50%; bottom:0; transform:translateX(-50%); width:100%; max-width:680px; max-height:88vh; max-height:88dvh; overflow:auto; overscroll-behavior:contain; z-index:61; background:var(--surface); border-radius:22px 22px 0 0; box-shadow:0 -8px 30px rgba(0,0,0,.2); padding:8px 16px calc(16px + var(--safe-bot)); display:none; transition:transform .15s ease-out;}
     .sheet.show{display:block; animation:up .2s ease-out;}
+    .sheet.drag{transition:none;}
     @keyframes up{from{transform:translate(-50%,24px); opacity:0;} to{transform:translate(-50%,0); opacity:1;}}
-    .grabber{width:36px; height:5px; border-radius:999px; background:var(--line-strong); margin:4px auto 12px;}
+    /* Griffzone über die ganze Breite: hier zieht man das Sheet nach unten zu (touch-action:none,
+       damit der Browser den Finger nicht als Scrollen/Pull-to-Refresh deutet). */
+    .grabzone{touch-action:none; padding:12px 0 12px; margin:-8px 0 0; cursor:grab;}
+    .grabber{width:36px; height:5px; border-radius:999px; background:var(--line-strong); margin:0 auto;}
     .sheet h2{font-size:1.25rem; margin:0 0 4px;}
     .sheet .sub{margin-bottom:12px;}
     .plist{list-style:none; margin:0; padding:0;}

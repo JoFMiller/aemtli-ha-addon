@@ -89,7 +89,7 @@ const CFG = {
   },
   set url(v) { const s = (v || "").trim().replace(/\/+$/, ""); s ? store.set("grocy.url", s) : store.del("grocy.url"); },
   get key() { return (store.get("grocy.key") || "").trim(); },
-  set key(v) { store.set("grocy.key", (v || "").trim()); store.del("aemtli.perm.deny"); store.del("aemtli.presets"); },
+  set key(v) { store.set("grocy.key", (v || "").trim()); store.del("aemtli.perm.deny"); store.del("aemtli.presets"); presetsCache = null; },
   get listId() { const n = Number(store.get("grocy.listId")); return Number.isFinite(n) && n > 0 ? n : 1; },
   set listId(v) { store.set("grocy.listId", String(Number(v) || 1)); },
   get listName() { return store.get("grocy.listName") || ""; },
@@ -579,6 +579,9 @@ function undoLineHTML() {
 function renderShopping() {
   if (state.tab !== "shopping") return;
   const focusKey = rememberFocus();
+  // Ein Re-Render (Vorschläge kommen nach, stilles Refresh) darf angefangenen Text nicht wegwerfen.
+  const prevIn = $("#add-input"), prevQty = $("#add-qty");
+  const typed = prevIn ? prevIn.value : "", typedQty = prevQty ? prevQty.value : "1";
   state.shopping.sort(shoppingCmp);
   const open = state.shopping.filter((s) => !s.done);
   const done = state.shopping.filter((s) => s.done);
@@ -609,6 +612,8 @@ function renderShopping() {
   `;
   const form = $("#add-form"); form.addEventListener("submit", onAddSubmit);
   const input = $("#add-input");
+  if (typed) input.value = typed;
+  if (typedQty && typedQty !== "1") $("#add-qty").value = typedQty;
   input.addEventListener("input", () => { state.addSelected = null; renderSuggestions(input.value); });
   input.addEventListener("keydown", onSuggestKey);
   input.addEventListener("blur", () => setTimeout(() => hideSuggestions(), 150));
@@ -715,7 +720,8 @@ async function onAddSubmit(e) {
   input.value = ""; qtyEl.value = "1"; state.addSelected = null; input.focus();
   // Notiz angelegt → tipploser Einstieg in den Produkt-Wizard über die Toast-Aktion.
   const newId = created && created.created_object_id != null ? num(created.created_object_id) : null;
-  if (!prod && newId) toast(label, { action: { label: "Als Produkt anlegen", fn: () => openWizard(newId) } });
+  // Die Zeile kann noch vor dem Nachladen angetippt werden → erst sicherstellen, dass sie im Stand ist.
+  if (!prod && newId) toast(label, { action: { label: "Als Produkt anlegen", fn: async () => { if (!state.shopping.some((s) => s.id === newId)) { try { await loadShopping(); } catch (_) {} renderShopping(); } openWizard(newId); } } });
   else toast(label);
   try { await loadShopping(); renderShopping(); updateBadges(); }
   catch (err) { /* hinzugefügt – nur das Nachladen hakt */ toast("Hinzugefügt. Die Liste konnte gerade nicht neu geladen werden.", { bad: true }); }
@@ -1572,14 +1578,16 @@ function mostCommonLocation() {
 function parseNote(text) {
   let s = String(text || "").replace(/\s+/g, " ").trim();
   let qty = null;
-  const m = /^(\d+(?:[.,]\d+)?)\s*(?:x|×|stk\.?|st\.?)?\s+(.+)$/i.exec(s);
+  // Führende Zahl = Stückzahl – außer sie ist eine Größenangabe („500 g Hackfleisch“ ist 1× 500 g).
+  const m = /^(\d+(?:[.,]\d+)?)\s*(?:x|×|stk\.?|st\.?)?\s+(?!(?:ml|cl|l|g|kg)\b)(.+)$/i.exec(s);
   if (m) { qty = num(m[1].replace(",", ".")); s = m[2].trim(); }
   const sz = /(\d+(?:[.,]\d+)?)\s*(ml|cl|l|g|kg)\b/i.exec(s);
   const unitType = sz ? (OFF_UNITS[sz[2].toLowerCase()] || null) : null;
   const cap = (x) => (x ? x.charAt(0).toUpperCase() + x.slice(1) : "");
-  const name = cap(s);
-  // base = Name ohne Größenangabe („Hackfleisch 500g“ → „Hackfleisch“) für Ähnlichkeit und Heuristik
-  const base = cap(sz ? s.replace(sz[0], " ").replace(/\s+/g, " ").trim() : s) || name;
+  // base = Name ohne Größenangabe („Hackfleisch 500g“ → „Hackfleisch“) für Ähnlichkeit und Heuristik;
+  // name behält die Größe, aber hinten („500 g Hackfleisch“ → „Hackfleisch 500 g“).
+  const base = cap(sz ? s.replace(sz[0], " ").replace(/\s+/g, " ").trim() : s) || cap(s);
+  const name = sz && sz.index === 0 && base ? `${base} ${sz[0].trim()}` : cap(s);
   return { qty: qty && qty > 0 ? qty : null, name, base, unitType };
 }
 
@@ -1736,12 +1744,14 @@ async function openWizard(rowId, opts = {}) {
   if (!state.locations.size || !state.units.size) { try { await loadMasters(true); } catch (_) {} }
   openSheet(`<h2 id="sheet-title">${esc(row.name)}</h2><p class="sub"><span class="spin"></span> Vorbelegung wird vorbereitet …</p>`);
   const pf = await wizardPrefill(row.name, row.amount > 1 ? row.amount : null, null);
+  const canScan = await scanAvailable();
+  if (!sheetOpen) return;   // während der Vorbelegung weggetippt → nicht wieder aufmachen
   const siblings = state.shopping.filter((s) => s.kind === "note" && s.id !== row.id && normKey(s.name) === normKey(row.name)).map((s) => s.id);
-  wz = { rowIds: [row.id, ...siblings], rowDone: row.done, note: row.name, noteAmount: row.amount, ...pf, mode: pf.sim.strong ? "link" : "create", linkTo: pf.sim.strong || null, onDone: opts.onDone || null, canScan: await scanAvailable() };
+  wz = { rowIds: [row.id, ...siblings], rowDone: row.done, note: row.name, noteAmount: row.amount, ...pf, mode: pf.sim.strong ? "link" : "create", linkTo: pf.sim.strong || null, onDone: opts.onDone || null, canScan };
   renderWizard();
 }
 function renderWizard() {
-  if (!wz) return;
+  if (!wz || wz.busy) return;   // während Anlegen/Verknüpfen nichts neu zeichnen (würde den Knopf wieder freigeben)
   const noRights = PERM.denied("MASTER_DATA_EDIT");
   if (noRights && wz.mode === "create" && !wz.forceCreate) wz.mode = wz.linkTo ? "link" : "search";
   const locs = [...state.locations.entries()];
@@ -1887,16 +1897,16 @@ async function linkRows(pid, qtyPurchase, quPurchase, quStock, f) {
 }
 async function wizardLink() {
   const p = wz.linkTo; if (!p) return;
-  const btn = $("#wz-go"); btn.disabled = true;
+  const btn = $("#wz-go"); btn.disabled = true; wz.busy = true;
   const qu = p.quPurchase != null ? p.quPurchase : p.quStock;
   const f = factor(p.id, qu, p.quStock) || 1;
   try {
     const r = await linkRows(p.id, wz.qty, qu, p.quStock, f);
-    closeSheet();
+    wz.busy = false; closeSheet();
     await loadShopping(); renderShopping(); updateBadges();
     toast(r.taken && !r.linked && !r.gone ? `„${p.name}“ hat jemand schon verknüpft.` : `„${p.name}“ steht jetzt als Produkt auf der Liste (${amountLabel(wz.qty, qu)}).`);
     if (wz.onDone) wz.onDone({ linked: true, pid: p.id });
-  } catch (e) { btn.disabled = false; toast(describeError(e), { bad: true }); }
+  } catch (e) { wz.busy = false; btn.disabled = false; toast(describeError(e), { bad: true }); }
 }
 async function wizardCreate() {
   const name = (wz.name || "").trim();
@@ -1904,7 +1914,7 @@ async function wizardCreate() {
   if (wz.locationId == null || wz.quPurchase == null || wz.quStock == null) { toast("Lagerort und Einheit fehlen."); return; }
   const dupe = [...state.products.values()].find((p) => normKey(p.name) === normKey(name));
   if (dupe) { if (dupe.active && !dupe.noOwnStock) { wz.linkTo = dupe; wz.mode = "link"; renderWizard(); toast(`„${dupe.name}“ gibt es schon – verknüpfen?`); } else toast(`„${dupe.name}“ gibt es in Grocy schon (deaktiviert oder ohne eigenen Bestand).`, { bad: true }); return; }
-  const btn = $("#wz-go"); btn.disabled = true; btn.innerHTML = `<span class="spin"></span><span>Lege an …</span>`; sheetLocked = true;
+  const btn = $("#wz-go"); btn.disabled = true; btn.innerHTML = `<span class="spin"></span><span>Lege an …</span>`; sheetLocked = true; wz.busy = true;
   const loc = state.locations.get(wz.locationId);
   const body = { name, location_id: wz.locationId, qu_id_purchase: wz.quPurchase, qu_id_stock: wz.quStock, default_best_before_days: wz.days, due_type: wz.dueType, min_stock_amount: wz.minStock || 0 };
   if (wz.groupId != null) body.product_group_id = wz.groupId;
@@ -1914,7 +1924,7 @@ async function wizardCreate() {
     const r = await api("/api/objects/products", { method: "POST", body });
     pid = r && r.created_object_id != null ? num(r.created_object_id) : null;
   } catch (e) {
-    sheetLocked = false;
+    sheetLocked = false; wz.busy = false;
     if (e.forbidden) { wz.mode = wz.linkTo ? "link" : "search"; wz.forceCreate = false; renderWizard(); toast(describeError(e), { bad: true, duration: 7000 }); return; }
     if (e.status === 400 && /unique/i.test(e.detail || "")) { try { await loadMasters(true); } catch (_) {} const d = [...state.products.values()].find((p) => normKey(p.name) === normKey(name)); if (d) { wz.linkTo = d; wz.mode = "link"; renderWizard(); toast(`„${d.name}“ gibt es schon – verknüpfen?`); return; } }
     if (e.unclear) { try { await loadMasters(true); } catch (_) {} const d = [...state.products.values()].find((p) => normKey(p.name) === normKey(name)); if (d) pid = d.id; }
@@ -1938,12 +1948,14 @@ async function wizardCreate() {
   const fEff = convWarn ? 1 : f;
   let linkRes = { linked: 0, gone: 0, taken: 0 };
   try { linkRes = await linkRows(pid, wz.qty, wz.quPurchase, wz.quStock, fEff); } catch (e) { DIAG.push({ kind: "wizard", msg: "link: " + (e.detail || e.message) }); }
-  sheetLocked = false; closeSheet();
+  sheetLocked = false; wz.busy = false; closeSheet();
   try { await loadShopping(); } catch (_) {}
   renderShopping(); updateBadges();
   const undo = { pid, barcodeId, rows: wz.rowIds.map((id) => ({ id, note: wz.note, amount: wz.noteAmount, done: wz.rowDone })) };
   const n = linkRes.linked + linkRes.gone;
-  toast(`„${name}“ angelegt${n ? ` · ${plural(n, "Zeile", "Zeilen")} auf der Liste` : ""}${convWarn ? " · Umrechnung in Grocy prüfen" : ""}`, { action: { label: "Rückgängig", fn: () => undoWizard(undo) } });
+  // Kein Rückgängig, wenn gleich der Einsortier-Lauf weitergeht (onDone) – der würde die Zeile sonst
+  // unter dem Undo wegbuchen.
+  toast(`„${name}“ angelegt${n ? ` · ${plural(n, "Zeile", "Zeilen")} auf der Liste` : ""}${convWarn ? " · Umrechnung in Grocy prüfen" : ""}`, wz.onDone ? {} : { action: { label: "Rückgängig", fn: () => undoWizard(undo) } });
   if (wz.onDone) wz.onDone({ created: true, pid });
   if (prod && prod.bbdDays === 0) DIAG.push({ kind: "wizard", msg: "bbdDays 0 nach Anlegen?" });
 }
@@ -1970,6 +1982,9 @@ async function undoWizard(u) {
 
 /* ---- Vor dem Einsortieren: Notizen + Produkte ohne Haltbarkeit ---- */
 function openPrePutawaySheet(done, notes, noBbd) {
+  // Gleiches Produkt in mehreren Wagen-Zeilen: nur einmal fragen (sonst doppelte Chip-IDs);
+  // die übrigen Zeilen bekommen unten dieselbe Haltbarkeit.
+  noBbd = noBbd.filter((it, i, a) => a.findIndex((x) => x.productId === it.productId) === i);
   const rows = [];
   for (const it of notes) rows.push(`<li data-note="${it.id}"><span class="st warn">${I.alert}</span><span class="b"><div>${esc(it.name)}</div><div class="m">Notiz – kommt nur von der Liste, nicht in den Vorrat</div></span><button class="btn btn-soft btn-sm" data-pre-wizard="${it.id}">${PERM.denied("MASTER_DATA_EDIT") ? "Verknüpfen" : "Anlegen"}</button></li>`);
   for (const it of noBbd) {
@@ -2037,7 +2052,8 @@ function buildSuggestions(log, stock, vol, todayISO) {
     if (!byPid.has(pid)) byPid.set(pid, new Map());
     const m = byPid.get(pid); m.set(d, (m.get(d) || 0) + Math.abs(num(r.amount)));
   }
-  const inStock = new Set((Array.isArray(stock) ? stock : []).filter((s) => num(s.amount) > 0).map((s) => num(s.product_id)));
+  const stockKnown = Array.isArray(stock);
+  const inStock = new Set((stockKnown ? stock : []).filter((s) => num(s.amount) > 0).map((s) => num(s.product_id)));
   const snooze = SNOOZE.all();
   const parents = new Set([...state.products.values()].map((p) => p.parentId).filter((x) => x != null));
   const onList = new Set(state.shopping.map((s) => s.productId).filter((x) => x != null));
@@ -2061,7 +2077,7 @@ function buildSuggestions(log, stock, vol, todayISO) {
       const since = dayDiff(todayISO, last);
       if (since >= SUGG.FACTOR * m && since < SUGG.STALE * m) consider(pid, since / m, `sonst etwa alle ${m} Tage · zuletzt vor ${since} Tagen`, qtyMedian, m);
     }
-    if (n >= SUGG.MIN_EMPTY && !inStock.has(pid)) consider(pid, 1.5, "nichts mehr im Vorrat", qtyMedian, null);
+    if (n >= SUGG.MIN_EMPTY && stockKnown && !inStock.has(pid)) consider(pid, 1.5, "nichts mehr im Vorrat", qtyMedian, null);
   }
   for (const mp of (vol && Array.isArray(vol.missing_products)) ? vol.missing_products : []) {
     const pid = num(mp.id); const miss = num(mp.amount_missing);
@@ -2081,7 +2097,7 @@ async function computeSuggestions(force = false) {
     const since = addDays(-SUGG.WINDOW);
     const [log, stock, vol] = await Promise.all([
       api(`/api/objects/stock_log?query%5B%5D=transaction_type%3Dpurchase&query%5B%5D=undone%3D0&query%5B%5D=row_created_timestamp%3E%3D${since}`),
-      api("/api/stock").catch(() => []),
+      api("/api/stock").catch(() => null),   // null = unbekannt → „nichts mehr im Vorrat“ wird dann nicht behauptet
       api("/api/stock/volatile?due_soon_days=5").catch(() => null),
     ]);
     state.sugg = buildSuggestions(log, stock, vol, isoDate(new Date()));
@@ -2154,7 +2170,7 @@ function cleanupPlan(entries, products, todayISO, { graceMhd = EXPIRE.GRACE_MHD,
 }
 // Genau diesen Bestandseintrag ausbuchen. Idempotent: zweiter Aufruf → „schon weg“.
 async function consumeEntry(e, spoiled, retried = false) {
-  const body = { amount: round3(e.amount), spoiled: !!spoiled, stock_entry_id: e.stock_id };
+  const body = { amount: num(e.amount), spoiled: !!spoiled, stock_entry_id: e.stock_id };   // exakt, Grocy rechnet mit 4 Stellen
   try {
     const r = await api(`/api/stock/products/${e.product_id}/consume`, { method: "POST", body });
     return Array.isArray(r) && r.length && r[0].transaction_id ? { ok: true, tx: r[0].transaction_id } : { ok: false, gone: true };
@@ -2185,6 +2201,7 @@ async function maybeCleanup() {
   try {
     const plan = await fetchExpiredPlan();
     if (!plan.length) { store.set("aemtli.expire.lastRun", today); return; }
+    if (sheetOpen || state.running) return;                                   // inzwischen beschäftigt → beim nächsten Laden
     if (CFG.expireAuto === null) { openCleanupConsentSheet(plan); return; }   // erster Lauf: einmal fragen
     store.set("aemtli.expire.lastRun", today);
     await runCleanup(plan);
@@ -2322,9 +2339,10 @@ function showAuthBanner(err) {
 let sheetOpen = false, sheetLocked = false;
 function openSheet(html, { locked = false } = {}) {
   const s = $("#sheet"), b = $("#backdrop");
-  s.innerHTML = `<div class="grabber" aria-hidden="true"></div>` + html;
+  s.innerHTML = `<div class="grabzone" aria-hidden="true"><div class="grabber"></div></div>` + html;
   s.classList.add("show"); b.classList.add("show");
-  sheetLocked = locked;
+  // Ein Re-Render (Chip gewählt) darf ein gesperrtes Sheet (laufende Buchung) nicht entsperren.
+  sheetLocked = (sheetOpen && sheetLocked) || locked;
   const wasOpen = sheetOpen;
   if (!sheetOpen) { sheetOpen = true; try { history.pushState({ sheet: true }, ""); } catch (_) {} }
   // Nur beim Öffnen fokussieren – ein Re-Render (z. B. Chip gewählt) soll die Tastatur nicht hochholen.
@@ -2338,6 +2356,31 @@ function closeSheet() {
   s.classList.remove("show"); b.classList.remove("show"); s.innerHTML = "";
   sheetOpen = false;
   if (history.state && history.state.sheet) { try { history.back(); } catch (_) {} }
+}
+// Sheet am Griff nach unten ziehen = schließen. Nur die Griffzone reagiert (touch-action:none dort),
+// damit Scrollen im Sheet und Pull-to-Refresh des Browsers nicht dazwischenfunken; gesperrte Sheets
+// (laufende Buchung) bleiben stehen.
+function wireSheetDrag() {
+  const s = $("#sheet"); let startY = null, dy = 0, pid = null;
+  const reset = () => { startY = null; s.classList.remove("drag"); s.style.transform = ""; };
+  s.addEventListener("pointerdown", (e) => {
+    if (sheetLocked || !e.target.closest(".grabzone")) return;
+    startY = e.clientY; dy = 0; pid = e.pointerId; s.classList.add("drag");
+    try { e.target.setPointerCapture(pid); } catch (_) {}
+  });
+  s.addEventListener("pointermove", (e) => {
+    if (startY === null || e.pointerId !== pid) return;
+    dy = Math.max(0, e.clientY - startY);
+    s.style.transform = `translate(-50%, ${dy}px)`;
+  });
+  const end = (e) => {
+    if (startY === null || e.pointerId !== pid) return;
+    const close = dy > 80 && !sheetLocked;
+    reset();
+    if (close) closeSheet();
+  };
+  s.addEventListener("pointerup", end);
+  s.addEventListener("pointercancel", end);
 }
 // Zurück-Geste/-Taste schließt das Sheet. Landet die History dabei auf einem Sheet-Eintrag
 // (Sheet wurde direkt nach dem Schließen neu geöffnet, z. B. Wizard → Vorprüfung), bleibt es offen.
@@ -2440,6 +2483,7 @@ function wire() {
   $("#ctawrap").addEventListener("click", safe(onViewClick));
   $("#toast-act").addEventListener("click", safe(() => { const a = toastAction; hideToast(); if (a) a.fn(); }));
   $("#backdrop").addEventListener("click", closeSheet);
+  wireSheetDrag();
   // Android-Tastatur: fokussiertes Feld im Sheet sichtbar halten.
   $("#sheet").addEventListener("focusin", (e) => { if (e.target.matches("input, select, textarea")) setTimeout(() => { try { e.target.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {} }, 150); });
   document.addEventListener("visibilitychange", () => {
