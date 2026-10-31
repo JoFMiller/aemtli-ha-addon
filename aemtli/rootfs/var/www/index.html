@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Ämtli</title>
   <meta name="description" content="Einkaufszettel & Hausarbeiten – schlanke Oberfläche für Grocy" />
 
@@ -219,6 +219,24 @@
     .undo-line .linkbtn{margin-left:auto;}
     pre.diag{white-space:pre-wrap; word-break:break-all; font-size:.75rem; background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:10px; max-height:220px; overflow:auto; margin:8px 0;}
 
+    /* ---- Ämtli 2.1: Wizard, Vorschläge, Vorrat ---- */
+    .row .body.tap{cursor:pointer;}
+    .iconbtn.warnbtn{color:var(--warn); border-color:color-mix(in srgb, var(--warn) 45%, transparent); background:var(--warn-soft);}
+    .sect .count.warn{color:var(--warn); background:var(--warn-soft); border-color:transparent;}
+    .chiprow{display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;}
+    .chip.pick{min-height:36px; padding:6px 12px; font-size:.875rem; font-weight:600; cursor:pointer; background:var(--surface-2); border:1px solid var(--line-strong); color:var(--ink); border-radius:999px; white-space:nowrap;}
+    .chip.pick.on{background:var(--brand-soft); color:var(--brand-ink); border-color:var(--brand);}
+    .chip.pick:active{transform:scale(.97);}
+    .simrow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:6px;}
+    .scanvideo{display:block; width:100%; max-height:40vh; border-radius:12px; background:#000; margin-top:8px; object-fit:cover;}
+    .row.sugg .lead{color:var(--ink-2);}
+    .row.sugg .trail .btn{gap:4px;}
+    .plist .st svg{vertical-align:-4px;}
+    .plist li .chiprow{margin-top:6px;}
+    .plist li .btn{flex:0 0 auto; align-self:center;}
+    .kv .linkbtn{margin-left:auto; flex:0 0 auto;}
+    .sheet .banner{margin:0 0 10px;}
+
     /* ---- Sticky CTA + Tabbar ---- */
     .ctawrap{position:fixed; left:50%; transform:translateX(-50%); bottom:calc(var(--tabbar-h) + 8px + var(--safe-bot)); width:100%; max-width:680px; padding:0 14px; z-index:35;}
     .cta{width:100%; min-height:var(--cta-h); font-size:1.0625rem; box-shadow:0 8px 24px rgba(27,38,32,.18);}
@@ -347,6 +365,7 @@
   <div class="vh" id="live-alert" role="alert" aria-live="assertive"></div>
 
   <script src="config.js"></script>
+  <script src="shelf.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

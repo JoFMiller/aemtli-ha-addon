@@ -89,7 +89,7 @@ const CFG = {
   },
   set url(v) { const s = (v || "").trim().replace(/\/+$/, ""); s ? store.set("grocy.url", s) : store.del("grocy.url"); },
   get key() { return (store.get("grocy.key") || "").trim(); },
-  set key(v) { store.set("grocy.key", (v || "").trim()); },
+  set key(v) { store.set("grocy.key", (v || "").trim()); store.del("aemtli.perm.deny"); store.del("aemtli.presets"); },
   get listId() { const n = Number(store.get("grocy.listId")); return Number.isFinite(n) && n > 0 ? n : 1; },
   set listId(v) { store.set("grocy.listId", String(Number(v) || 1)); },
   get listName() { return store.get("grocy.listName") || ""; },
@@ -98,6 +98,15 @@ const CFG = {
   set bookStock(v) { store.set("grocy.bookStock", v ? "1" : "0"); },
   get theme() { return store.get("aemtli.theme") || "system"; },
   set theme(v) { v === "system" ? store.del("aemtli.theme") : store.set("aemtli.theme", v); },
+  // Ämtli 2.1
+  get suggest() { return store.get("aemtli.suggest") !== "0"; },              // Vorschläge anzeigen (Standard: an)
+  set suggest(v) { store.set("aemtli.suggest", v ? "1" : "0"); },
+  get noteHint() { return store.get("aemtli.noteHint") !== "0"; },            // vor dem Einsortieren an Notizen erinnern
+  set noteHint(v) { store.set("aemtli.noteHint", v ? "1" : "0"); },
+  get expireAuto() { const v = store.get("aemtli.expire.auto"); return v === null ? null : v === "1"; }, // null = noch nie gefragt
+  set expireAuto(v) { store.set("aemtli.expire.auto", v ? "1" : "0"); },
+  get expireSpoiled() { return store.get("aemtli.expire.spoiled") === "1"; }, // als „verdorben“ statt „verbraucht“ buchen
+  set expireSpoiled(v) { store.set("aemtli.expire.spoiled", v ? "1" : "0"); },
   get configured() { return !!this.key && !!this.url; },
 };
 
@@ -136,6 +145,11 @@ const I = {
   eye: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
   paste: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>',
   back: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
+  alert: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16.5h.01"/></svg>',
+  bulb: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2Z"/></svg>',
+  camera: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2l1.5-2h7L17 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  link: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7L12 19"/></svg>',
+  x: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
 };
 
 /* ---------------------------------------------------------------- Utils */
@@ -253,9 +267,15 @@ async function api(path, { method = "GET", body, key = CFG.key, base = CFG.url, 
   if (txt) { try { data = JSON.parse(txt); isJson = true; } catch (_) { isJson = false; } }
   if (!res.ok) {
     const proxyDown = res.headers.get("x-aemtli-proxy") === "down" || !!(data && data.aemtli_proxy);
+    // Fehlendes Grocy-Recht: 403 mit JSON „Permission missing: <RECHT>“ (verifiziert an v4.6).
+    // Das ist KEIN Schlüsselproblem und darf nie den Auth-Banner auslösen.
+    const permMatch = isJson && res.status === 403 ? /permission missing:\s*([A-Z_]+)/i.exec((data && data.error_message) || "") : null;
+    if (permMatch) PERM.deny(permMatch[1].toUpperCase());
     const err = new ApiError(res.status, isJson && data ? (data.error_message || data.message || "") : "", {
       fromGrocy: isJson && !proxyDown,
       proxyDown,
+      forbidden: !!permMatch,
+      permission: permMatch ? permMatch[1].toUpperCase() : null,
       unclear: mutation && [502, 503, 504].includes(res.status),
       // HA-Ingress-Session abgelaufen: nur unter Ingress und nur, wenn HA selbst antwortet
       // („401: Unauthorized“). Grocy liefert bei fehlendem/ungültigem Key 401 mit LEEREM
@@ -300,6 +320,7 @@ function describeError(e) {
   }
   if (e.haAuth) return "Deine Home-Assistant-Anmeldung ist abgelaufen. Bitte die Seite neu laden.";
   if (e.notJson) return "Unerwartete Antwort (Anmelde- oder WLAN-Portalseite?). Bitte die Seite neu laden.";
+  if (e.forbidden) return `Dein Grocy-Konto darf das nicht${e.permission ? " (Recht " + PERM_LABEL(e.permission) + " fehlt)" : ""}. V kann es in Grocy unter Benutzer → Berechtigungen freischalten.`;
   if (e.status === 401 || e.status === 403) return "Dein Grocy-Schlüssel gilt nicht mehr. Vielleicht wurde er in Grocy gelöscht.";
   if (e.proxyDown || e.status === 502 || e.status === 503) return "Grocy ist gerade nicht erreichbar. Läuft das Grocy-Add-on in Home Assistant?";
   if (e.status === 504) return "Grocy antwortet zu langsam. Gleich nochmal versuchen.";
@@ -308,7 +329,8 @@ function describeError(e) {
   if (e.status === 400) return "Grocy hat das abgelehnt" + (e.detail ? ": " + translateGrocy(e.detail) : ".");
   return `Grocy-Fehler ${e.status}${e.detail ? ": " + e.detail : ""}`;
 }
-const isAuthErr = (e) => e instanceof ApiError && (e.status === 401 || e.status === 403 || e.haAuth);
+const isAuthErr = (e) => e instanceof ApiError && !e.forbidden && (e.status === 401 || e.status === 403 || e.haAuth);
+const PERM_LABEL = (p) => ({ MASTER_DATA_EDIT: "Stammdaten bearbeiten", STOCK_CONSUME: "Bestand verbrauchen", STOCK_PURCHASE: "Bestand einkaufen", STOCK_EDIT: "Bestand bearbeiten", SHOPPINGLIST_ITEMS_ADD: "Einkaufsliste bearbeiten" }[p] || p);
 // Objekt schon weg? (DELETE auf fehlende ID liefert 400 „Object not found“, GET 404)
 const isGone = (e) => e instanceof ApiError && (e.status === 404 || (e.status === 400 && /object not found/i.test(e.detail || "")));
 
@@ -346,6 +368,10 @@ function ingestMasters({ products, units, convs, locs }) {
       bbdDays: p.default_best_before_days != null ? num(p.default_best_before_days) : 0,
       noOwnStock: String(p.no_own_stock) === "1",
       parentId: p.parent_product_id != null && p.parent_product_id !== "" ? num(p.parent_product_id) : null,
+      dueType: num(p.due_type) === 2 ? 2 : 1,                       // 1 = MHD, 2 = Verbrauchsdatum
+      tare: String(p.enable_tare_weight_handling) === "1",
+      minStock: num(p.min_stock_amount),
+      groupId: p.product_group_id != null && p.product_group_id !== "" ? num(p.product_group_id) : null,
     };
     state.products.set(rec.id, rec);
     if (rec.active && !rec.noOwnStock) state.productNames.push({ id: rec.id, name: rec.name, key: normKey(rec.name) });
@@ -472,10 +498,12 @@ function plan(it, override = {}) {
     out.locationId = override.locationId;
     const l = state.locations.get(override.locationId); out.locationName = l ? l.name : "";
   }
+  // Das Datum wird IMMER explizit gesendet: Grocy würde sonst bei einem Tiefkühl-Lagerort
+  // „heute“ setzen (Gefrier-Regel, verifiziert an v4.6) – unabhängig vom Produkt-Default.
   if (override.bbd === "never") { out.bbd = NEVER; out.bbdMode = "custom"; out.bbdLabel = "unbegrenzt haltbar"; }
   else if (override.bbd) { out.bbd = override.bbd; out.bbdMode = "custom"; out.bbdLabel = "haltbar bis " + fmtDate(override.bbd); }
-  else if (p.bbdDays === -1) { out.bbdMode = "never"; out.bbdLabel = "unbegrenzt haltbar"; }                 // Grocy setzt 2999-12-31
-  else if (p.bbdDays > 0) { out.bbdMode = "default"; out.bbdLabel = "haltbar bis " + fmtDate(addDays(p.bbdDays)); } // Grocy rechnet selbst
+  else if (p.bbdDays === -1) { out.bbd = NEVER; out.bbdMode = "never"; out.bbdLabel = "unbegrenzt haltbar"; }
+  else if (p.bbdDays > 0) { out.bbd = addDays(p.bbdDays); out.bbdMode = "default"; out.bbdLabel = "haltbar bis " + fmtDate(out.bbd); }
   else { out.bbd = NEVER; out.bbdMode = "missing"; out.bbdLabel = "ohne Haltbarkeitsdatum"; }         // sonst würde Grocy HEUTE setzen
   return out;
 }
@@ -495,9 +523,23 @@ function kindChip(it) {
   if (it.kind === "nostock") return `<span class="chip">ohne eigenen Bestand</span>`;
   return "";
 }
+// „!“-Knopf an Notiz-Zeilen: öffnet den Produkt-Wizard.
+const wizardBtnHTML = (it, busy) => `<button class="iconbtn warnbtn" data-act="wizard" data-id="${it.id}" aria-label="„${esc(it.name)}“ als Produkt anlegen" title="Als Produkt anlegen" ${busy ? "disabled" : ""}>${I.alert}</button>`;
 function openRowHTML(it) {
   const busy = state.busy.has("s" + it.id);
   const amt = it.kind === "note" ? "" : amountLabel(it.dispValue, it.dispQu);
+  if (it.kind === "note") return `
+    <div class="row">
+      <button class="lead" data-act="toggle" data-id="${it.id}" role="checkbox" aria-checked="false"
+              aria-label="${esc(it.name)}, in den Wagen legen" ${busy ? 'aria-disabled="true"' : ""}>
+        <span class="check" aria-hidden="true"></span>
+      </button>
+      <span class="body tap" data-act="toggle" data-id="${it.id}">
+        <span class="nm">${esc(it.name)} ${kindChip(it)}</span>
+        ${it.amount > 1 ? `<span class="meta">${esc(fmtNum(it.amount))}×</span>` : ""}
+      </span>
+      <span class="trail">${wizardBtnHTML(it, busy)}</span>
+    </div>`;
   return `
     <button class="row" data-act="toggle" data-id="${it.id}" role="checkbox" aria-checked="false"
             aria-label="${esc(it.name)}${amt ? ", " + esc(amt) : ""}, in den Wagen legen" ${busy ? 'aria-disabled="true"' : ""}>
@@ -524,7 +566,7 @@ function cartRowHTML(it) {
         ${jm ? `<span class="meta ${jm.cls}">${esc(jm.text)}</span>` : (amt ? `<span class="meta">${esc(amt)}${hint}</span>` : "")}
       </span>
       <span class="trail">
-        <button class="iconbtn" data-act="adjust" data-id="${it.id}" aria-label="${esc(it.name)} anpassen" ${busy ? "disabled" : ""}>${I.more}</button>
+        ${it.kind === "note" ? wizardBtnHTML(it, busy) : `<button class="iconbtn" data-act="adjust" data-id="${it.id}" aria-label="${esc(it.name)} anpassen" ${busy ? "disabled" : ""}>${I.more}</button>`}
       </span>
     </div>
     ${jm && jm.btn ? `<div class="rowbtns"><button class="btn btn-ghost btn-sm" data-act="${jm.btn.act}" data-id="${it.id}" ${busy ? "disabled" : ""}>${esc(jm.btn.label)}</button></div>` : ""}`;
@@ -556,12 +598,13 @@ function renderShopping() {
       <ul class="suggest" id="suggest" role="listbox" hidden></ul>
     </div>
     ${undoLineHTML()}
+    ${suggestionsHTML()}
     <h2 class="sect">Zu kaufen <span class="count">${open.length}</span></h2>
     <section class="card" aria-label="Zu kaufen">
       ${open.length ? open.map(openRowHTML).join("") : emptyHTML(I.leaf, done.length ? "Alles im Wagen" : "Alles da", "Schreib oben rein, was fehlt.")}
     </section>
     ${done.length ? `
-    <h2 class="sect">Im Wagen <span class="count">${done.length}</span></h2>
+    <h2 class="sect">Im Wagen <span class="count">${done.length}</span>${done.some((d) => d.kind === "note") ? `<span class="count warn">${esc(plural(done.filter((d) => d.kind === "note").length, "Notiz", "Notizen"))}</span>` : ""}</h2>
     <section class="card" aria-label="Im Wagen">${done.map(cartRowHTML).join("")}</section>` : ""}
   `;
   const form = $("#add-form"); form.addEventListener("submit", onAddSubmit);
@@ -577,9 +620,10 @@ function renderCta() {
   const done = state.tab === "shopping" ? state.shopping.filter((s) => s.done) : [];
   if (!done.length || state.tab !== "shopping") { wrap.hidden = true; wrap.innerHTML = ""; app.classList.remove("has-cta"); view.classList.remove("has-cta"); return; }
   const products = done.filter((d) => d.kind === "product").length;
-  const label = CFG.bookStock && products
+  const notes = done.filter((d) => d.kind === "note").length;
+  const label = (CFG.bookStock && products
     ? `${plural(done.length, "Sache", "Sachen")} einsortieren`
-    : `${plural(done.length, "Sache", "Sachen")} von der Liste nehmen`;
+    : `${plural(done.length, "Sache", "Sachen")} von der Liste nehmen`) + (notes && products ? ` · ${plural(notes, "Notiz", "Notizen")}` : "");
   wrap.innerHTML = `<button class="btn btn-primary cta" data-act="putaway-all" ${state.running ? "disabled" : ""}>${I.pack}<span>${esc(label)}</span></button>`;
   wrap.hidden = false; app.classList.add("has-cta"); view.classList.add("has-cta");
 }
@@ -664,11 +708,15 @@ async function onAddSubmit(e) {
     label = `„${name}“ ergänzt`;
   }
   adding = true; submit.disabled = true; input.disabled = true;
-  try { await api("/api/objects/shopping_list", { method: "POST", body }); }
+  let created = null;
+  try { created = await api("/api/objects/shopping_list", { method: "POST", body }); }
   catch (err) { toast(describeError(err), { bad: true }); return; }          // Eingabe bleibt stehen
   finally { adding = false; submit.disabled = false; input.disabled = false; }
   input.value = ""; qtyEl.value = "1"; state.addSelected = null; input.focus();
-  toast(label);
+  // Notiz angelegt → tipploser Einstieg in den Produkt-Wizard über die Toast-Aktion.
+  const newId = created && created.created_object_id != null ? num(created.created_object_id) : null;
+  if (!prod && newId) toast(label, { action: { label: "Als Produkt anlegen", fn: () => openWizard(newId) } });
+  else toast(label);
   try { await loadShopping(); renderShopping(); updateBadges(); }
   catch (err) { /* hinzugefügt – nur das Nachladen hakt */ toast("Hinzugefügt. Die Liste konnte gerade nicht neu geladen werden.", { bad: true }); }
 }
@@ -704,7 +752,7 @@ async function toggleShopping(id) {
 
 /* ---- Abgleich nach unklarer Buchung: hat Grocy den Eintrag? (note-Marker) ---- */
 async function reconcile(itemId) {
-  const rows = await api(`/api/objects/stock_log?query%5B%5D=note%3D${encodeURIComponent("aemtli:sl-" + itemId)}&query%5B%5D=undone%3D0&limit=1`);
+  const rows = await api(`/api/objects/stock_log?query%5B%5D=note%3D${encodeURIComponent("aemtli:sl-" + itemId)}&query%5B%5D=undone%3D0&query%5B%5D=transaction_type%3Dpurchase&limit=1`);
   const r = Array.isArray(rows) && rows.length ? rows[0] : null;
   return r ? { booked: true, tx: r.transaction_id || null } : { booked: false };
 }
@@ -844,7 +892,11 @@ async function runPutaway(items, { overrides = {} } = {}) {
 }
 async function putAwayAll() {
   const done = state.shopping.filter((s) => s.done);
-  if (!done.length) return;
+  if (!done.length || state.running) return;
+  // Vor dem Lauf einmal hinweisen: Notizen sind noch kein Produkt, Produkte ohne Haltbarkeit.
+  const notes = CFG.noteHint ? done.filter((d) => d.kind === "note" && !NOTE_SKIP.has(d.id)) : [];
+  const noBbd = CFG.bookStock && CFG.noteHint ? done.filter((d) => d.kind === "product" && d.product && d.product.bbdDays === 0 && !NOTE_SKIP.has("p" + d.productId)) : [];
+  if (notes.length || noBbd.length) { openPrePutawaySheet(done, notes, noBbd); return; }
   await runPutaway(done);
 }
 async function removeOnly(id) {
@@ -1318,6 +1370,33 @@ function renderSettings() {
       ${last ? `<button type="button" class="kv" id="set-undo"><span class="k">Letztes Einsortieren rückgängig machen</span><span class="v">${esc(agoLabel(last.at))} · ${last.rows.length}</span></button>` : ""}
     </section>
 
+    <h2 class="sect">Einkauf</h2>
+    <section class="card">
+      <div class="field">
+        <label class="toggle"><input type="checkbox" id="set-suggest" ${CFG.suggest ? "checked" : ""} /><span class="t">Vorschläge anzeigen</span></label>
+        <span class="hint">Aus euren Einkäufen der letzten Monate: was sonst regelmäßig gekauft wird und überfällig ist, was unter Mindestbestand liegt.${state.sugg && state.sugg.stats && state.sugg.stats.rhythmProducts === 0 ? " Noch zu wenig Einkäufe für Rhythmus-Vorschläge – Produkte brauchen mindestens drei Käufe." : ""}</span>
+      </div>
+      <div class="field">
+        <label class="toggle"><input type="checkbox" id="set-notehint" ${CFG.noteHint ? "checked" : ""} /><span class="t">Vor dem Einsortieren an Notizen erinnern</span></label>
+        <span class="hint">Notizen kommen nicht in den Vorrat. Ämtli fragt pro Notiz einmal, ob sie ein Produkt werden soll.</span>
+      </div>
+    </section>
+
+    <h2 class="sect">Vorrat</h2>
+    <section class="card">
+      <div class="field">
+        <label class="toggle"><input type="checkbox" id="set-expire" ${CFG.expireAuto ? "checked" : ""} /><span class="t">Abgelaufenes automatisch aus dem Vorrat nehmen</span></label>
+        <span class="hint">MHD 7 Tage nach Ablauf, Verbrauchsdatum am Tag danach. Läuft einmal täglich auf dem Gerät, das Ämtli öffnet; die Buchung erscheint in Grocy unter deinem Namen. Am besten nur auf einem Gerät aktiv.</span>
+      </div>
+      <div class="field">
+        <label class="toggle"><input type="checkbox" id="set-spoiled" ${CFG.expireSpoiled ? "checked" : ""} /><span class="t">Dabei als „verdorben“ buchen</span></label>
+        <span class="hint">Aus, wenn das meiste einfach aufgegessen wurde (Grocys Verderb-Statistik bleibt dann ehrlich).</span>
+      </div>
+      ${(() => { const l = store.json("aemtli.expire.last", null); return l && l.rows && Date.now() - l.at < 7 * 86400000 ? `<button type="button" class="kv" id="set-expire-undo"><span class="k">Zuletzt automatisch entfernt</span><span class="v">${esc(plural(l.rows.length, "Sache", "Sachen"))} · ${esc(agoLabel(l.at))}</span><span class="linkbtn">Rückgängig</span></button>` : ""; })()}
+      ${(() => { const n = [...state.products.values()].filter((p) => p.active && !p.noOwnStock && p.parentId == null && p.bbdDays === 0).length; return n ? `<button type="button" class="kv" id="set-maintain"><span class="k">${esc(plural(n, "Produkt", "Produkte"))} ohne Haltbarkeit</span><span class="linkbtn">Pflegen</span></button>` : ""; })()}
+      ${(() => { const n = [...state.products.values()].filter((p) => p.active && p.tare).length; return n ? `<div class="kv"><span class="k hint">${esc(plural(n, "Produkt mit Waage wird", "Produkte mit Waage werden"))} nicht aufgeräumt</span></div>` : ""; })()}
+    </section>
+
     <h2 class="sect">Darstellung</h2>
     <section class="card"><div class="field">
       <span class="lbl">Design</span>
@@ -1347,6 +1426,12 @@ function renderSettings() {
   $("#set-form").addEventListener("submit", onSettingsSave);
   $("#set-check").addEventListener("click", () => onSettingsSave(new Event("submit"), { checkOnly: true }));
   $("#set-book").addEventListener("change", (e) => { CFG.bookStock = e.target.checked; toast(e.target.checked ? "Vorrat wird mitgeführt" : "Vorrat wird nicht mehr gebucht"); });
+  $("#set-suggest").addEventListener("change", (e) => { CFG.suggest = e.target.checked; if (e.target.checked) computeSuggestions(true); });
+  $("#set-notehint").addEventListener("change", (e) => { CFG.noteHint = e.target.checked; });
+  $("#set-expire").addEventListener("change", (e) => { CFG.expireAuto = e.target.checked; if (e.target.checked) { store.del("aemtli.expire.lastRun"); toast("Läuft beim nächsten Öffnen der Einkaufsliste."); } });
+  $("#set-spoiled").addEventListener("change", (e) => { CFG.expireSpoiled = e.target.checked; });
+  const eu = $("#set-expire-undo"); if (eu) eu.addEventListener("click", undoCleanup);
+  const mt = $("#set-maintain"); if (mt) mt.addEventListener("click", openMaintainSheet);
   $$("[data-theme-pick]").forEach((b) => b.addEventListener("click", () => { CFG.theme = b.dataset.themePick; applyTheme(); $$("[data-theme-pick]").forEach((x) => x.setAttribute("aria-pressed", x === b ? "true" : "false")); }));
   const su = $("#set-undo"); if (su) su.addEventListener("click", () => { go("shopping"); undoLast(); });
   $("#diag-text").textContent = DIAG.text();
@@ -1387,6 +1472,809 @@ async function onSettingsSave(e, { checkOnly = false } = {}) {
   } catch (err) {
     status.innerHTML = `<span class="err">✗ ${esc(describeError(err))}</span>${CFG.configured && !checkOnly ? ` <span class="muted">(bisherige Einstellungen bleiben)</span>` : ""}`;
   } finally { btn.disabled = false; }
+}
+
+/* ====================================================================== */
+/*  ÄMTLI 2.1 – Produkt-Wizard, Vorschläge, Vorrat                         */
+/* ====================================================================== */
+
+/* ---- Rechte-Gedächtnis: 403 „Permission missing: X“ 24 h merken ---- */
+const PERM = {
+  _all() { return store.json("aemtli.perm.deny", {}) || {}; },
+  denied(name) { const d = this._all()[name]; return !!d && Date.now() - d < 24 * 3600 * 1000; },
+  deny(name) { if (!name) return; const a = this._all(); a[name] = Date.now(); store.set("aemtli.perm.deny", JSON.stringify(a)); },
+};
+
+/* ---- Pro Gerät gemerkt: Notizen/Produkte, für die nicht mehr gefragt wird ---- */
+const NOTE_SKIP = {
+  _s() { return new Set(store.json("aemtli.noteSkip", []) || []); },
+  has(id) { return this._s().has(typeof id === "string" ? id : num(id)); },
+  add(ids) { const s = this._s(); for (const id of ids) s.add(typeof id === "string" ? id : num(id)); store.set("aemtli.noteSkip", JSON.stringify([...s])); },
+  prune(validRowIds) { const s = this._s(); let ch = false; for (const v of [...s]) if (typeof v === "number" && !validRowIds.has(v)) { s.delete(v); ch = true; } if (ch) store.set("aemtli.noteSkip", JSON.stringify([...s])); },
+};
+
+/* ---- Nutzer-Vorgaben aus Grocy (product_presets_*), 24 h gecacht ---- */
+let presetsCache = null;
+async function presets() {
+  if (presetsCache) return presetsCache;
+  const c = store.json("aemtli.presets", null);
+  if (c && c.v && Date.now() - c.t < 24 * 3600 * 1000) return (presetsCache = c.v);
+  let v = { locationId: null, quId: null, dueDays: null, groupId: null };
+  try {
+    const s = await api("/api/user/settings");
+    const n = (k) => { const x = Number(s && s[k]); return Number.isFinite(x) ? x : null; };
+    v = { locationId: n("product_presets_location_id"), quId: n("product_presets_qu_id"), dueDays: n("product_presets_default_due_days"), groupId: n("product_presets_product_group_id") };
+    if (v.locationId != null && v.locationId <= 0) v.locationId = null;      // -1 = kein Preset
+    if (v.quId != null && v.quId <= 0) v.quId = null;
+    if (v.groupId != null && v.groupId <= 0) v.groupId = null;
+    if (v.dueDays === 0) v.dueDays = null;                                   // 0 = nicht gesetzt
+    store.set("aemtli.presets", JSON.stringify({ t: Date.now(), v }));
+  } catch (_) {}
+  return (presetsCache = v);
+}
+
+/* ---- Heuristik aus shelf.js (Keyword/OFF-Kategorie → Haltbarkeit, Einheitstyp, Lagerort-Typ) ---- */
+const SHELF = typeof SHELF_LIFE !== "undefined" ? SHELF_LIFE : [];
+const UNIT_NAMES = typeof UNIT_TYPE_NAMES !== "undefined" ? UNIT_TYPE_NAMES : {};
+const OFF_UNITS = typeof OFF_UNIT_TYPE !== "undefined" ? OFF_UNIT_TYPE : {};
+// Längstes passendes Keyword gewinnt („hafermilch“ vor „milch“); kurze Keywords (≤ 4) nur als ganzes Wort
+// („eis“ darf nicht in „reis“ treffen). OFF-Tags zählen nur, wenn kein Keyword passt; dann frühere Zeile zuerst.
+function heuristic(name, tags) {
+  const k = " " + normKey(name).replace(/[()/,.;:]/g, " ").replace(/\s+/g, " ").trim() + " ";
+  let best = null, bestScore = -1, bestKey = null;
+  SHELF.forEach((row, idx) => {
+    for (const m of row.match || []) {
+      let s = -1;
+      if (m.startsWith("en:")) { if (Array.isArray(tags) && tags.includes(m)) s = 100 - idx; }
+      else if (m.length <= 4 ? (k.includes(" " + m + " ") || k.includes(" " + m + "-") || k.includes("-" + m + " ")) : k.includes(m)) s = 1000 + m.length;
+      if (s > bestScore) { bestScore = s; best = row; bestKey = m.startsWith("en:") ? null : m; }
+    }
+  });
+  return best ? { days: best.days, unitType: best.unit, locType: best.location, key: bestKey } : null;
+}
+function unitTypeOf(quId) {
+  const u = state.units.get(num(quId)); if (!u) return null;
+  const names = [u.name, u.plural].map((x) => normKey(x).replace(/[().]/g, "").trim()).filter(Boolean);
+  for (const [type, list] of Object.entries(UNIT_NAMES)) if (names.some((n) => list.includes(n) || list.includes(n.split(" ")[0]))) return type;
+  for (const n of names) { if (/liter$/.test(n)) return "liter"; if (/gramm$/.test(n)) return "gramm"; }
+  return null;
+}
+function unitByType(type) {
+  const prio = { liter: ["liter", "l", "ltr", "milliliter", "ml", "flasche"], gramm: ["gramm", "g", "kilogramm", "kg"], packung: ["packung", "pack", "päckchen", "pck", "beutel", "tüte"], stueck: ["stück", "stk", "st", "piece", "pc", "dose", "glas", "becher"] }[type] || [];
+  for (const want of prio) for (const [id, u] of state.units) { const n = normKey(u.name).replace(/[().]/g, "").trim(); if (n === want || n.split(" ")[0] === want) return id; }
+  for (const [id] of state.units) if (unitTypeOf(id) === type) return id;
+  return null;
+}
+function defaultUnit() {
+  const s = unitByType("stueck"); if (s != null) return s;
+  const p = unitByType("packung"); if (p != null) return p;
+  return state.units.size ? [...state.units.keys()][0] : null;
+}
+function locationByType(type) {
+  const locs = [...state.locations.entries()];
+  const find = (f) => { const x = locs.find(([, l]) => f(l)); return x ? x[0] : null; };
+  if (type === "tiefkuehl") return find((l) => l.freezer);
+  if (type === "kuehl") return find((l) => !l.freezer && /k[üu]hl|fridge/i.test(l.name));
+  if (type === "bad") return find((l) => /bad|putz|haushalt|wc|wasch|hygiene/i.test(l.name));
+  if (type === "vorrat") return find((l) => !l.freezer && /vorrat|speise|kammer|schrank|regal|pantry|küche|kueche/i.test(l.name) && !/k[üu]hl/i.test(l.name));
+  return null;
+}
+function mostCommonLocation() {
+  const c = new Map();
+  for (const p of state.products.values()) if (p.active && p.locationId != null && state.locations.has(p.locationId)) c.set(p.locationId, (c.get(p.locationId) || 0) + 1);
+  let best = null; for (const [id, n] of c) if (!best || n > best.n) best = { id, n };
+  if (best) return best.id;
+  const nf = [...state.locations.entries()].find(([, l]) => !l.freezer);
+  return nf ? nf[0] : (state.locations.size ? [...state.locations.keys()][0] : null);
+}
+
+/* ---- Notiztext → Menge, Name, Einheiten-Hinweis ---- */
+function parseNote(text) {
+  let s = String(text || "").replace(/\s+/g, " ").trim();
+  let qty = null;
+  const m = /^(\d+(?:[.,]\d+)?)\s*(?:x|×|stk\.?|st\.?)?\s+(.+)$/i.exec(s);
+  if (m) { qty = num(m[1].replace(",", ".")); s = m[2].trim(); }
+  const sz = /(\d+(?:[.,]\d+)?)\s*(ml|cl|l|g|kg)\b/i.exec(s);
+  const unitType = sz ? (OFF_UNITS[sz[2].toLowerCase()] || null) : null;
+  const cap = (x) => (x ? x.charAt(0).toUpperCase() + x.slice(1) : "");
+  const name = cap(s);
+  // base = Name ohne Größenangabe („Hackfleisch 500g“ → „Hackfleisch“) für Ähnlichkeit und Heuristik
+  const base = cap(sz ? s.replace(sz[0], " ").replace(/\s+/g, " ").trim() : s) || name;
+  return { qty: qty && qty > 0 ? qty : null, name, base, unitType };
+}
+
+/* ---- Ähnliche Produkte (stark = verknüpfen, schwach = Vorbelegung) ---- */
+function lev(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const prev = new Array(b.length + 1).fill(0).map((_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0]; prev[0] = i;
+    for (let j = 1; j <= b.length; j++) { const tmp = prev[j]; prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1)); diag = tmp; }
+  }
+  return prev[b.length];
+}
+function similarProducts(name) {
+  const k = normKey(name); if (!k) return { strong: null, weak: [], inactive: null };
+  const words = k.split(/\s+/).filter((w) => w.length >= 4);
+  let strong = null; const weak = [];
+  for (const p of state.productNames) {
+    const pk = p.key;
+    if (pk === k || (k.length >= 5 && pk.length >= 5 && lev(pk, k) <= 2)) { if (!strong) strong = state.products.get(p.id); continue; }
+    if ((pk.length >= 4 && k.includes(pk)) || (k.length >= 4 && pk.includes(k)) || words.some((w) => pk.split(/\s+/).includes(w))) weak.push(state.products.get(p.id));
+  }
+  let inactive = null;
+  if (!strong) for (const p of state.products.values()) if (!p.active && normKey(p.name) === k) { inactive = p; break; }
+  return { strong, weak: weak.filter(Boolean).slice(0, 4), inactive };
+}
+
+/* ---- Vorbelegung: bestehendes Produkt → Barcode/OFF → Notiztext → Heuristik → Lagerort-Typ → Presets → Default ---- */
+async function wizardPrefill(rawName, qtyHint, scan) {
+  const pr = await presets();
+  const parsed = parseNote(scan && scan.name ? scan.name : rawName);
+  const sim = similarProducts(parsed.base || parsed.name);
+  const weak = sim.weak;
+  const tags = scan && scan.off ? scan.off.tags : null;
+  const h = heuristic(parsed.base || parsed.name, tags) || (tags && tags.length ? heuristic("", tags) : null);
+  // Schwache Treffer („Milch“ zu „Hafermilch“) sind Haushalts-Konvention → Einheit. Lagerort und
+  // Haltbarkeit kommen aus der Heuristik, wenn ihr Keyword mindestens so spezifisch ist wie der Treffername.
+  const hWins = !!(h && h.key && weak.every((p) => h.key.length >= normKey(p.name).length));
+  const median = (xs) => { const a = xs.filter((x) => Number.isFinite(x)).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
+  const weakLoc = () => { if (!weak.length) return null; const c = new Map(); weak.forEach((p) => p.locationId != null && c.set(p.locationId, (c.get(p.locationId) || 0) + 1)); const top = [...c.entries()].sort((a, b) => b[1] - a[1])[0]; return top ? top[0] : null; };
+  let locationId = hWins ? locationByType(h.locType) : weakLoc();
+  if (locationId == null) locationId = hWins ? weakLoc() : (h ? locationByType(h.locType) : null);
+  if (locationId == null && pr.locationId != null && state.locations.has(pr.locationId)) locationId = pr.locationId;
+  if (locationId == null) locationId = mostCommonLocation();
+  let quPurchase = null, quStock = null, factorPS = 1;
+  const ref = weak.find((p) => p.quPurchase != null && p.quStock != null);
+  if (ref) { quPurchase = ref.quPurchase; quStock = ref.quStock; factorPS = factor(ref.id, ref.quPurchase, ref.quStock) || 1; }
+  else {
+    const t = parsed.unitType || (scan && scan.off && scan.off.unitType) || (h && h.unitType) || null;
+    const u = t ? unitByType(t) : null;
+    quPurchase = u != null ? u : (pr.quId != null && state.units.has(pr.quId) ? pr.quId : defaultUnit());
+    quStock = quPurchase;
+  }
+  const weakDays = median(weak.map((p) => p.bbdDays).filter((d) => d !== 0));
+  let days = hWins ? h.days : weakDays;
+  if (days == null) days = hWins ? weakDays : (h ? h.days : null);
+  if (days == null && locationId != null) { const l = state.locations.get(locationId); if (l && l.freezer) days = 180; else if (l && /k[üu]hl|fridge/i.test(l.name)) days = 14; }
+  if (days == null && pr.dueDays != null) days = pr.dueDays;
+  if (days == null) days = -1;                                              // harter Default: „nie“, nie 0
+  const dueType = h && h.days <= 2 && /fleisch|hack|fisch|lachs|garnelen|hähnchen|geflügel|pute|wurst/.test(normKey(parsed.name)) ? 2 : 1;
+  return { name: parsed.name, qty: qtyHint || parsed.qty || 1, locationId, quPurchase, quStock, factorPS, days, dueType, groupId: pr.groupId, minStock: 0, sim, barcode: scan ? scan.code : null, image: scan ? scan.image : null, hint: h };
+}
+
+/* ---- Barcode: Kamera-Scan (nur wo BarcodeDetector existiert) + Nachschlagen ---- */
+let scanStream = null, scanTimer = null;
+function stopScan() {
+  if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+  if (scanStream) { try { scanStream.getTracks().forEach((t) => t.stop()); } catch (_) {} scanStream = null; }
+  const v = $("#scan-video"); if (v) { try { v.srcObject = null; } catch (_) {} }
+  const b = $("#scanbox"); if (b) b.hidden = true;
+}
+async function scanAvailable() {
+  if (UNDER_INGRESS || !window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !("BarcodeDetector" in window)) return false;
+  try { const f = await window.BarcodeDetector.getSupportedFormats(); return Array.isArray(f) && f.includes("ean_13"); } catch (_) { return false; }
+}
+async function startScan(onCode) {
+  stopScan();
+  const box = $("#scanbox"), video = $("#scan-video"); if (!box || !video) return;
+  box.hidden = false;
+  let stream = null, err = null;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: false }); }
+  catch (e) { err = e; if (e && e.name === "OverconstrainedError") { try { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); err = null; } catch (e2) { err = e2; } } }
+  if (!stream) { box.hidden = true; toast(err && err.name === "NotAllowedError" ? "Kamera nicht erlaubt. In den Browser-Einstellungen für diese Seite freigeben." : "Kamera nicht verfügbar.", { bad: true }); return; }
+  scanStream = stream; video.srcObject = stream;
+  try { await video.play(); } catch (_) {}
+  let det; try { det = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] }); } catch (_) { stopScan(); return; }
+  let lastCode = null, hits = 0;
+  const tick = async () => {
+    if (!scanStream) return;
+    try {
+      if (video.readyState >= 2) {
+        const codes = await det.detect(video);
+        const c = codes.find((x) => x.rawValue && /^\d{6,14}$/.test(x.rawValue));
+        if (c) { if (c.rawValue === lastCode) hits++; else { lastCode = c.rawValue; hits = 1; } if (hits >= 2) { stopScan(); onCode(lastCode); return; } }
+      }
+    } catch (_) {}
+    scanTimer = setTimeout(tick, 250);
+  };
+  scanTimer = setTimeout(tick, 300);
+}
+function offUnitType(p) {
+  const u = String(p.product_quantity_unit || "").toLowerCase();
+  if (num(p.product_quantity) > 0 && OFF_UNITS[u]) return OFF_UNITS[u];
+  const m = /(\d+(?:[.,]\d+)?)\s*([a-zµ]+)/i.exec(String(p.quantity || "").toLowerCase());
+  return m && OFF_UNITS[m[2]] ? OFF_UNITS[m[2]] : null;
+}
+// Reihenfolge: in Grocy bekannt? → Grocys Online-Lookup (Name/Bild, braucht MASTER_DATA_EDIT)
+// → Open Food Facts direkt (Kategorie/Größe) über den Add-on-Proxy „off/“.
+async function lookupBarcode(code) {
+  try {
+    const d = await api(`/api/stock/products/by-barcode/${encodeURIComponent(code)}`);
+    const pid = d && d.product ? num(d.product.id) : null;
+    if (pid) return { known: state.products.get(pid) || { id: pid, name: String(d.product.name || "") }, code };
+  } catch (e) { if (!(e.status === 400 && /no product with barcode/i.test(e.detail || "")) && !e.forbidden) throw e; }
+  let name = null, image = null;
+  if (!PERM.denied("MASTER_DATA_EDIT")) {
+    try { const r = await api(`/api/stock/barcodes/external-lookup/${encodeURIComponent(code)}`, { timeout: 8000 }); if (r && r.name) { name = String(r.name); image = r.__image_url || null; } } catch (_) {}
+  }
+  let off = null;
+  try {
+    const fields = "fields=product_name,product_name_de,quantity,product_quantity,product_quantity_unit,categories_tags,image_small_url";
+    const u = ADDON ? new URL("off/product/" + encodeURIComponent(code) + "?" + fields, document.baseURI).href
+                    : `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?${fields}`;
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(u, { signal: ctrl.signal }); clearTimeout(t);
+    if (res.ok) {
+      const j = await res.json(); const p = j && j.product;
+      if (p) { off = { tags: Array.isArray(p.categories_tags) ? p.categories_tags : [], unitType: offUnitType(p), name: p.product_name_de || p.product_name || null, image: p.image_small_url || null }; if (!name && off.name) name = off.name; if (!image && off.image) image = off.image; }
+    }
+  } catch (_) {}
+  return { known: null, code, name, image, off };
+}
+
+/* ---- Wizard „Notiz → Produkt“ ---- */
+const SHELF_CHIPS = [[-1, "nie"], [3, "3 Tage"], [7, "1 Woche"], [14, "2 Wochen"], [30, "1 Monat"], [90, "3 Monate"], [180, "6 Monate"], [365, "1 Jahr"]];
+function shelfChipsHTML(id, days) {
+  const items = SHELF_CHIPS.slice();
+  if (days != null && !items.some(([v]) => v === days)) { const i = items.findIndex(([v]) => v > days); items.splice(i < 0 ? items.length : i, 0, [days, plural(days, "Tag", "Tage")]); }
+  return `<div class="chiprow" id="${id}" role="radiogroup" aria-label="Haltbarkeit">${items.map(([v, l]) => `<button type="button" class="chip pick ${v === days ? "on" : ""}" data-v="${v}" role="radio" aria-checked="${v === days}">${esc(l)}</button>`).join("")}</div>`;
+}
+function wireChips(id, onPick) {
+  const row = $("#" + id); if (!row) return;
+  row.addEventListener("click", (e) => { const b = e.target.closest(".chip.pick"); if (!b) return; $$(".chip.pick", row).forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b ? "true" : "false"); }); if (onPick) onPick(b.dataset.v); });
+}
+const chipValue = (id) => { const b = $(`#${id} .chip.pick.on`); return b ? b.dataset.v : null; };
+const unitOptions = (sel) => [...state.units.entries()].sort((a, b) => a[1].name.localeCompare(b[1].name, "de")).map(([id, u]) => `<option value="${id}" ${id === sel ? "selected" : ""}>${esc(u.name)}</option>`).join("");
+const dateLabelFor = (days) => days === -1 ? "unbegrenzt haltbar" : `haltbar bis ${fmtDate(addDays(days))}`;
+
+let wz = null;    // Zustand des offenen Wizards
+async function openWizard(rowId, opts = {}) {
+  const row = state.shopping.find((s) => s.id === num(rowId));
+  if (!row || row.kind !== "note") { toast("Diese Zeile ist keine Notiz mehr."); return; }
+  if (JOURNAL.get(row.id)) { toast("Diese Zeile hängt noch in einer Buchung."); return; }
+  if (!state.locations.size || !state.units.size) { try { await loadMasters(true); } catch (_) {} }
+  openSheet(`<h2 id="sheet-title">${esc(row.name)}</h2><p class="sub"><span class="spin"></span> Vorbelegung wird vorbereitet …</p>`);
+  const pf = await wizardPrefill(row.name, row.amount > 1 ? row.amount : null, null);
+  const siblings = state.shopping.filter((s) => s.kind === "note" && s.id !== row.id && normKey(s.name) === normKey(row.name)).map((s) => s.id);
+  wz = { rowIds: [row.id, ...siblings], rowDone: row.done, note: row.name, noteAmount: row.amount, ...pf, mode: pf.sim.strong ? "link" : "create", linkTo: pf.sim.strong || null, onDone: opts.onDone || null, canScan: await scanAvailable() };
+  renderWizard();
+}
+function renderWizard() {
+  if (!wz) return;
+  const noRights = PERM.denied("MASTER_DATA_EDIT");
+  if (noRights && wz.mode === "create" && !wz.forceCreate) wz.mode = wz.linkTo ? "link" : "search";
+  const locs = [...state.locations.entries()];
+  const locPick = locs.length <= 6
+    ? `<div class="chiprow" id="wz-loc" role="radiogroup" aria-label="Lagerort">${locs.map(([id, l]) => `<button type="button" class="chip pick ${id === wz.locationId ? "on" : ""}" data-v="${id}" role="radio" aria-checked="${id === wz.locationId}">${l.freezer ? "❄ " : ""}${esc(l.name)}</button>`).join("")}</div>`
+    : `<select id="wz-loc-sel" aria-label="Lagerort">${locs.map(([id, l]) => `<option value="${id}" ${id === wz.locationId ? "selected" : ""}>${esc(l.name)}</option>`).join("")}</select>`;
+  const diffUnits = wz.quPurchase !== wz.quStock;
+  const similarHTML = wz.sim.weak.length && wz.mode !== "link"
+    ? `<div class="simrow"><span class="hint">Ähnlich:</span>${wz.sim.weak.map((p) => `<button type="button" class="chip pick" data-link="${p.id}">${esc(p.name)}</button>`).join("")}</div>` : "";
+  const inactiveHTML = wz.sim.inactive ? `<p class="hint">„${esc(wz.sim.inactive.name)}“ gibt es in Grocy, ist dort aber deaktiviert. Reaktivieren geht nur in Grocy.</p>` : "";
+  const amountLine = `<div class="field" style="padding:8px 0"><span class="lbl">Auf der Liste</span><div class="stepper"><button type="button" id="wz-minus" aria-label="weniger">−</button><input type="number" id="wz-qty" value="${esc(String(wz.qty))}" min="0.001" step="any" inputmode="decimal" aria-label="Menge" /><button type="button" id="wz-plus" aria-label="mehr">+</button></div><div class="hint" id="wz-qtyhint" style="text-align:center"></div></div>`;
+  let body;
+  if (wz.mode === "link") {
+    const p = wz.linkTo;
+    const loc = p && p.locationId != null ? state.locations.get(p.locationId) : null;
+    body = `
+      <p class="sub">Notiz mit einem Grocy-Produkt verknüpfen</p>
+      <section class="card" style="margin:0 0 10px"><div class="kv"><span class="dot" aria-hidden="true"></span><span class="k">${esc(p.name)}</span><span class="v">${esc([p.quPurchase != null ? unitLabel(p.quPurchase, 2) : "", loc ? loc.name : ""].filter(Boolean).join(" · "))}</span></div></section>
+      ${amountLine}
+      <div class="btnrow">
+        <button class="btn btn-primary full" id="wz-go">${I.link}<span>Verknüpfen</span></button>
+        ${noRights ? "" : `<button class="btn btn-ghost full" id="wz-new">Nein, neues Produkt anlegen</button>`}
+        ${wz.sim.weak.length ? `<div class="simrow"><span class="hint">Oder:</span>${wz.sim.weak.map((q) => `<button type="button" class="chip pick" data-link="${q.id}">${esc(q.name)}</button>`).join("")}</div>` : ""}
+      </div>`;
+  } else if (wz.mode === "search") {
+    body = `
+      <div class="banner show info" role="status" style="margin:0 0 10px"><span aria-hidden="true">${I.alert}</span><span class="txt">Du darfst in Grocy keine Produkte anlegen. Verknüpfe die Notiz mit einem vorhandenen Produkt – oder bitte V, es in Grocy anzulegen.</span></div>
+      <div class="field" style="padding:8px 0"><label for="wz-search">Produkt suchen</label><input type="text" id="wz-search" placeholder="Name eingeben …" autocomplete="off" /><div class="simrow" id="wz-search-res"></div></div>
+      ${inactiveHTML}`;
+  } else {
+    body = `
+      <p class="sub">${wz.barcode ? "Aus Barcode " + esc(wz.barcode) : "Neues Produkt in Grocy anlegen"}</p>
+      ${inactiveHTML}
+      <div class="field" style="padding:8px 0"><label for="wz-name">Name</label>
+        <div class="inline">${wz.image ? `<img src="${esc(wz.image)}" alt="" width="44" height="44" style="border-radius:10px;object-fit:cover;flex:0 0 auto" />` : ""}<input type="text" id="wz-name" value="${esc(wz.name)}" autocapitalize="sentences" />${wz.canScan ? `<button type="button" class="iconbtn" id="wz-scan" aria-label="Barcode scannen" title="Barcode scannen">${I.camera}</button>` : ""}</div>
+        <div id="scanbox" hidden><video id="scan-video" class="scanvideo" playsinline muted></video><p class="hint">Barcode vor die Kamera halten · <button type="button" class="linkbtn" id="wz-scan-stop" style="min-height:32px;padding:2px 8px">Abbrechen</button></p></div>
+        ${similarHTML}
+      </div>
+      <div class="field" style="padding:8px 0"><span class="lbl">Lagerort</span>${locs.length ? locPick : `<span class="hint err">In Grocy fehlt ein Lagerort – bitte dort anlegen.</span>`}</div>
+      <div class="field" style="padding:8px 0"><label for="wz-qu">Einheit</label>
+        <select id="wz-qu">${unitOptions(wz.quPurchase)}</select>
+        <button type="button" class="linkbtn" id="wz-diff" style="justify-content:flex-start">${diffUnits ? "Einkaufs- und Lager-Einheit gleichsetzen" : "Einkaufs- und Lager-Einheit unterscheiden"}</button>
+        ${diffUnits ? `<div class="inline" style="margin-top:4px"><span class="hint" style="white-space:nowrap">1 ${esc(unitLabel(wz.quPurchase, 1))} =</span><input type="number" id="wz-factor" value="${esc(String(wz.factorPS || 1))}" min="0.001" step="any" inputmode="decimal" aria-label="Umrechnungsfaktor" style="width:90px" /><select id="wz-qu2" aria-label="Lager-Einheit">${unitOptions(wz.quStock)}</select></div>` : ""}
+        <span class="hint">Einheiten verwaltet Grocy.</span>
+      </div>
+      <div class="field" style="padding:8px 0"><span class="lbl">Haltbarkeit <span class="hint" id="wz-dayslbl">· ${esc(dateLabelFor(wz.days))}</span></span>${shelfChipsHTML("wz-days", wz.days)}
+        <div class="inline" style="margin-top:6px"><button type="button" class="linkbtn" id="wz-days-other" style="min-height:36px">andere …</button><input type="number" id="wz-days-in" min="1" max="3650" placeholder="Tage" inputmode="numeric" style="width:110px" hidden /></div>
+      </div>
+      ${amountLine}
+      <details class="help" style="margin:0 0 8px"><summary>Mehr: Produktgruppe · Mindestbestand · Verbrauchsdatum · Barcode</summary>
+        <div class="field" style="padding:8px 0"><label for="wz-group">Produktgruppe</label><select id="wz-group"><option value="">– keine –</option></select></div>
+        <div class="field" style="padding:8px 0"><label for="wz-min">Mindestbestand</label><input type="number" id="wz-min" value="${esc(String(wz.minStock || 0))}" min="0" step="any" inputmode="decimal" /><span class="hint">Für Vorschläge nicht nötig – Ämtli lernt aus dem Kaufrhythmus.</span></div>
+        <div class="field" style="padding:8px 0"><label class="toggle"><input type="checkbox" id="wz-due2" ${wz.dueType === 2 ? "checked" : ""} /><span class="t">Verbrauchsdatum statt Mindesthaltbarkeit</span></label><span class="hint">Nach dem Datum ist es weg (Fleisch, Fisch). Sonst meist noch gut.</span></div>
+        <div class="field" style="padding:8px 0"><label for="wz-barcode">Barcode</label><input type="text" id="wz-barcode" value="${esc(wz.barcode || "")}" inputmode="numeric" placeholder="optional" /></div>
+      </details>
+      <div class="btnrow">
+        <button class="btn btn-primary full" id="wz-go" ${locs.length && state.units.size ? "" : "disabled"}>${I.plus}<span>${wz.onDone ? "Anlegen & weiter" : "Produkt anlegen"}</span></button>
+      </div>`;
+  }
+  openSheet(`
+    <h2 id="sheet-title">${esc(wz.note)}</h2>
+    ${body}
+    <div class="btnrow" style="margin-top:4px">
+      <button class="linkbtn" id="wz-keep" style="justify-content:center">Als Notiz lassen</button>
+      <button class="linkbtn danger" id="wz-remove" style="justify-content:center">Von der Liste nehmen</button>
+    </div>`);
+  wireWizard();
+}
+function wireWizard() {
+  const qty = $("#wz-qty");
+  const cur = () => { const v = num(qty && qty.value); return v > 0 ? v : 1; };
+  const updQtyHint = () => {
+    const h = $("#wz-qtyhint"); if (!h) return;
+    const qu = wz.mode === "link" ? (wz.linkTo.quPurchase != null ? wz.linkTo.quPurchase : wz.linkTo.quStock) : wz.quPurchase;
+    const qs = wz.mode === "link" ? wz.linkTo.quStock : wz.quStock;
+    const f = wz.mode === "link" ? (factor(wz.linkTo.id, qu, qs) || 1) : (wz.quPurchase === wz.quStock ? 1 : (wz.factorPS || 1));
+    h.textContent = `${amountLabel(cur(), qu)}${qu !== qs ? ` = ${amountLabel(round3(cur() * f), qs)} im Vorrat` : ""}`;
+  };
+  if (qty) { $("#wz-minus").addEventListener("click", () => { qty.value = String(Math.max(0.001, round3(cur() - 1))); wz.qty = cur(); updQtyHint(); }); $("#wz-plus").addEventListener("click", () => { qty.value = String(round3(cur() + 1)); wz.qty = cur(); updQtyHint(); }); qty.addEventListener("input", () => { wz.qty = cur(); updQtyHint(); }); updQtyHint(); }
+  $$("[data-link]").forEach((b) => b.addEventListener("click", () => { const p = state.products.get(num(b.dataset.link)); if (p) { wz.linkTo = p; wz.mode = "link"; renderWizard(); } }));
+  const go = $("#wz-go"); if (go) go.addEventListener("click", () => (wz.mode === "link" ? wizardLink() : wizardCreate()));
+  const nw = $("#wz-new"); if (nw) nw.addEventListener("click", () => { wz.mode = "create"; wz.forceCreate = true; renderWizard(); });
+  $("#wz-keep").addEventListener("click", () => { NOTE_SKIP.add(wz.rowIds); closeSheet(); if (wz.onDone) wz.onDone({ skipped: true }); });
+  $("#wz-remove").addEventListener("click", async () => { const id = wz.rowIds[0]; closeSheet(); await removeOnly(id); if (wz.onDone) wz.onDone({ removed: true }); });
+  if (wz.mode === "search") {
+    const inp = $("#wz-search"), res = $("#wz-search-res");
+    const show = () => { const list = suggestions(inp.value); res.innerHTML = list.map((p) => `<button type="button" class="chip pick" data-link="${p.id}">${esc(p.name)}</button>`).join("") || `<span class="hint">${inp.value.trim() ? "Nichts gefunden." : ""}</span>`; $$("[data-link]", res).forEach((b) => b.addEventListener("click", () => { const p = state.products.get(num(b.dataset.link)); if (p) { wz.linkTo = p; wz.mode = "link"; renderWizard(); } })); };
+    inp.addEventListener("input", show); show(); inp.focus();
+    return;
+  }
+  if (wz.mode !== "create") return;
+  $("#wz-name").addEventListener("input", (e) => { wz.name = e.target.value; });
+  wireChips("wz-loc", (v) => { wz.locationId = num(v); });
+  const ls = $("#wz-loc-sel"); if (ls) ls.addEventListener("change", () => { wz.locationId = num(ls.value); });
+  $("#wz-qu").addEventListener("change", (e) => { wz.quPurchase = num(e.target.value); if (wz.quPurchase === wz.quStock || !$("#wz-qu2")) wz.quStock = wz.quPurchase; renderWizard(); });
+  const qu2 = $("#wz-qu2"); if (qu2) qu2.addEventListener("change", () => { wz.quStock = num(qu2.value); updQtyHint(); });
+  const fac = $("#wz-factor"); if (fac) fac.addEventListener("input", () => { wz.factorPS = num(fac.value) > 0 ? num(fac.value) : 1; updQtyHint(); });
+  $("#wz-diff").addEventListener("click", () => { if (wz.quPurchase !== wz.quStock) { wz.quStock = wz.quPurchase; wz.factorPS = 1; } else { const alt = [...state.units.keys()].find((id) => id !== wz.quPurchase); if (alt == null) { toast("Grocy kennt nur eine Einheit."); return; } wz.quStock = alt; wz.factorPS = wz.factorPS > 0 && wz.factorPS !== 1 ? wz.factorPS : 1; } renderWizard(); });
+  wireChips("wz-days", (v) => { wz.days = num(v); $("#wz-dayslbl").textContent = "· " + dateLabelFor(wz.days); const di = $("#wz-days-in"); if (di) di.hidden = true; });
+  $("#wz-days-other").addEventListener("click", () => { const di = $("#wz-days-in"); di.hidden = false; di.focus(); });
+  $("#wz-days-in").addEventListener("change", (e) => { const d = num(e.target.value); if (d > 0) { wz.days = Math.round(d); renderWizard(); } });
+  $("#wz-min").addEventListener("input", (e) => { wz.minStock = Math.max(0, num(e.target.value)); });
+  $("#wz-due2").addEventListener("change", (e) => { wz.dueType = e.target.checked ? 2 : 1; });
+  $("#wz-barcode").addEventListener("input", (e) => { wz.barcode = e.target.value.replace(/\D/g, "") || null; });
+  const grp = $("#wz-group");
+  const det = grp.closest("details");
+  det.addEventListener("toggle", async () => {
+    if (!det.open || grp.dataset.loaded) return;
+    grp.dataset.loaded = "1";
+    try { const gs = await api("/api/objects/product_groups"); grp.innerHTML = `<option value="">– keine –</option>` + (Array.isArray(gs) ? gs : []).sort((a, b) => String(a.name).localeCompare(String(b.name), "de")).map((g) => `<option value="${num(g.id)}" ${num(g.id) === wz.groupId ? "selected" : ""}>${esc(g.name)}</option>`).join(""); } catch (_) {}
+  }, { once: false });
+  grp.addEventListener("change", () => { wz.groupId = grp.value ? num(grp.value) : null; });
+  const sc = $("#wz-scan");
+  if (sc) sc.addEventListener("click", () => startScan(async (code) => {
+    toast("Barcode erkannt – schlage nach …");
+    try {
+      const r = await lookupBarcode(code);
+      if (r.known) { wz.linkTo = state.products.get(r.known.id) || r.known; wz.mode = "link"; wz.barcode = code; renderWizard(); toast(`„${wz.linkTo.name}“ ist in Grocy schon bekannt.`); return; }
+      const pf = await wizardPrefill(r.name || wz.name, wz.qty, { code, name: r.name, image: r.image, off: r.off });
+      Object.assign(wz, pf, { mode: "create", barcode: code, qty: wz.qty });
+      renderWizard();
+      if (!r.name) toast("Barcode unbekannt – wird beim Anlegen am Produkt gespeichert.");
+    } catch (e) { toast(describeError(e), { bad: true }); }
+  }));
+  const ss = $("#wz-scan-stop"); if (ss) ss.addEventListener("click", stopScan);
+}
+// Grocy-Listenzeile(n) auf ein Produkt umstellen. Menge ist in der Lager-Einheit!
+async function linkRows(pid, qtyPurchase, quPurchase, quStock, f) {
+  const amountStock = round3(qtyPurchase * (f || 1));
+  let linked = 0, gone = 0, taken = 0;
+  for (const id of wz.rowIds) {
+    try {
+      const cur = await api(`/api/objects/shopping_list/${id}`);
+      if (cur && cur.product_id != null && cur.product_id !== "") { taken++; continue; }   // jemand anders war schneller
+      await api(`/api/objects/shopping_list/${id}`, { method: "PUT", body: { product_id: pid, note: "", amount: amountStock, ...(quPurchase != null ? { qu_id: quPurchase } : {}) } });
+      linked++;
+    } catch (e) {
+      if (isGone(e)) { try { await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, product_id: pid, amount: amountStock, done: wz.rowDone ? 1 : 0, ...(quPurchase != null ? { qu_id: quPurchase } : {}) } }); gone++; } catch (_) {} }
+      else throw e;
+    }
+  }
+  return { linked, gone, taken, amountStock };
+}
+async function wizardLink() {
+  const p = wz.linkTo; if (!p) return;
+  const btn = $("#wz-go"); btn.disabled = true;
+  const qu = p.quPurchase != null ? p.quPurchase : p.quStock;
+  const f = factor(p.id, qu, p.quStock) || 1;
+  try {
+    const r = await linkRows(p.id, wz.qty, qu, p.quStock, f);
+    closeSheet();
+    await loadShopping(); renderShopping(); updateBadges();
+    toast(r.taken && !r.linked && !r.gone ? `„${p.name}“ hat jemand schon verknüpft.` : `„${p.name}“ steht jetzt als Produkt auf der Liste (${amountLabel(wz.qty, qu)}).`);
+    if (wz.onDone) wz.onDone({ linked: true, pid: p.id });
+  } catch (e) { btn.disabled = false; toast(describeError(e), { bad: true }); }
+}
+async function wizardCreate() {
+  const name = (wz.name || "").trim();
+  if (!name) { toast("Bitte einen Namen eingeben."); return; }
+  if (wz.locationId == null || wz.quPurchase == null || wz.quStock == null) { toast("Lagerort und Einheit fehlen."); return; }
+  const dupe = [...state.products.values()].find((p) => normKey(p.name) === normKey(name));
+  if (dupe) { if (dupe.active && !dupe.noOwnStock) { wz.linkTo = dupe; wz.mode = "link"; renderWizard(); toast(`„${dupe.name}“ gibt es schon – verknüpfen?`); } else toast(`„${dupe.name}“ gibt es in Grocy schon (deaktiviert oder ohne eigenen Bestand).`, { bad: true }); return; }
+  const btn = $("#wz-go"); btn.disabled = true; btn.innerHTML = `<span class="spin"></span><span>Lege an …</span>`; sheetLocked = true;
+  const loc = state.locations.get(wz.locationId);
+  const body = { name, location_id: wz.locationId, qu_id_purchase: wz.quPurchase, qu_id_stock: wz.quStock, default_best_before_days: wz.days, due_type: wz.dueType, min_stock_amount: wz.minStock || 0 };
+  if (wz.groupId != null) body.product_group_id = wz.groupId;
+  if (loc && loc.freezer) body.default_best_before_days_after_freezing = wz.days;   // sonst setzt Grocy im Tiefkühler „heute“
+  let pid = null;
+  try {
+    const r = await api("/api/objects/products", { method: "POST", body });
+    pid = r && r.created_object_id != null ? num(r.created_object_id) : null;
+  } catch (e) {
+    sheetLocked = false;
+    if (e.forbidden) { wz.mode = wz.linkTo ? "link" : "search"; wz.forceCreate = false; renderWizard(); toast(describeError(e), { bad: true, duration: 7000 }); return; }
+    if (e.status === 400 && /unique/i.test(e.detail || "")) { try { await loadMasters(true); } catch (_) {} const d = [...state.products.values()].find((p) => normKey(p.name) === normKey(name)); if (d) { wz.linkTo = d; wz.mode = "link"; renderWizard(); toast(`„${d.name}“ gibt es schon – verknüpfen?`); return; } }
+    if (e.unclear) { try { await loadMasters(true); } catch (_) {} const d = [...state.products.values()].find((p) => normKey(p.name) === normKey(name)); if (d) pid = d.id; }
+    if (!pid) { btn.disabled = false; btn.innerHTML = `${I.plus}<span>Produkt anlegen</span>`; toast(describeError(e), { bad: true }); return; }
+  }
+  const f = wz.quPurchase === wz.quStock ? 1 : (wz.factorPS > 0 ? wz.factorPS : 1);
+  let convWarn = false;
+  if (f !== 1) {
+    try {
+      const rows = await api(`/api/objects/quantity_unit_conversions?query%5B%5D=product_id%3D${pid}`);
+      const list = Array.isArray(rows) ? rows : [];
+      const put = async (from, to, fac) => { const ex = list.find((c) => num(c.from_qu_id) === from && num(c.to_qu_id) === to); if (ex) await api(`/api/objects/quantity_unit_conversions/${ex.id}`, { method: "PUT", body: { factor: fac } }); else await api("/api/objects/quantity_unit_conversions", { method: "POST", body: { product_id: pid, from_qu_id: from, to_qu_id: to, factor: fac } }); };
+      await put(wz.quPurchase, wz.quStock, round3(f) || f);
+      await put(wz.quStock, wz.quPurchase, 1 / f);
+    } catch (_) { convWarn = true; }
+  }
+  let barcodeId = null;
+  if (wz.barcode) { try { const b = await api("/api/objects/product_barcodes", { method: "POST", body: { product_id: pid, barcode: wz.barcode } }); barcodeId = b && b.created_object_id != null ? num(b.created_object_id) : null; } catch (e) { DIAG.push({ kind: "wizard", msg: "barcode: " + (e.detail || e.message) }); } }
+  try { await loadMasters(true); } catch (_) {}
+  const prod = state.products.get(pid);
+  const fEff = convWarn ? 1 : f;
+  let linkRes = { linked: 0, gone: 0, taken: 0 };
+  try { linkRes = await linkRows(pid, wz.qty, wz.quPurchase, wz.quStock, fEff); } catch (e) { DIAG.push({ kind: "wizard", msg: "link: " + (e.detail || e.message) }); }
+  sheetLocked = false; closeSheet();
+  try { await loadShopping(); } catch (_) {}
+  renderShopping(); updateBadges();
+  const undo = { pid, barcodeId, rows: wz.rowIds.map((id) => ({ id, note: wz.note, amount: wz.noteAmount, done: wz.rowDone })) };
+  const n = linkRes.linked + linkRes.gone;
+  toast(`„${name}“ angelegt${n ? ` · ${plural(n, "Zeile", "Zeilen")} auf der Liste` : ""}${convWarn ? " · Umrechnung in Grocy prüfen" : ""}`, { action: { label: "Rückgängig", fn: () => undoWizard(undo) } });
+  if (wz.onDone) wz.onDone({ created: true, pid });
+  if (prod && prod.bbdDays === 0) DIAG.push({ kind: "wizard", msg: "bbdDays 0 nach Anlegen?" });
+}
+async function undoWizard(u) {
+  hideToast();
+  let note = 0, fail = 0;
+  for (const r of u.rows) {
+    try {
+      const cur = await api(`/api/objects/shopping_list/${r.id}`).catch(() => null);
+      if (cur && num(cur.product_id) === u.pid) {
+        await api(`/api/objects/shopping_list/${r.id}`, { method: "DELETE" });
+        await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, note: r.note, amount: r.amount, done: r.done ? 1 : 0 } });
+        note++;
+      }
+    } catch (_) { fail++; }
+  }
+  if (u.barcodeId) { try { await api(`/api/objects/product_barcodes/${u.barcodeId}`, { method: "DELETE" }); } catch (_) {} }
+  let kept = false;
+  try { await api(`/api/objects/products/${u.pid}`, { method: "DELETE" }); } catch (_) { kept = true; }
+  try { await loadMasters(true); await loadShopping(); } catch (_) {}
+  renderShopping(); updateBadges();
+  toast(kept ? `Zeile${note === 1 ? " ist" : "n sind"} wieder Notiz. Das Produkt bleibt in Grocy (wird schon verwendet).` : `Rückgängig: ${plural(note, "Zeile", "Zeilen")} wieder Notiz, Produkt gelöscht.${fail ? " Teilweise fehlgeschlagen." : ""}`, { bad: !!fail || kept, duration: 6000 });
+}
+
+/* ---- Vor dem Einsortieren: Notizen + Produkte ohne Haltbarkeit ---- */
+function openPrePutawaySheet(done, notes, noBbd) {
+  const rows = [];
+  for (const it of notes) rows.push(`<li data-note="${it.id}"><span class="st warn">${I.alert}</span><span class="b"><div>${esc(it.name)}</div><div class="m">Notiz – kommt nur von der Liste, nicht in den Vorrat</div></span><button class="btn btn-soft btn-sm" data-pre-wizard="${it.id}">${PERM.denied("MASTER_DATA_EDIT") ? "Verknüpfen" : "Anlegen"}</button></li>`);
+  for (const it of noBbd) {
+    const h = heuristic(it.name) ; const d = h ? h.days : -1;
+    rows.push(`<li data-prod="${it.productId}"><span class="st warn">${I.alert}</span><span class="b"><div>${esc(it.name)}</div><div class="m">Produkt ohne Haltbarkeit · Vorschlag: ${esc(dateLabelFor(d))}</div>${shelfChipsHTML("pre-days-" + it.productId, d)}<label class="toggle" style="min-height:36px"><input type="checkbox" data-remember="${it.productId}" checked /><span class="hint">Für dieses Produkt merken</span></label></span></li>`);
+  }
+  const total = done.length;
+  openSheet(`
+    <h2 id="sheet-title">${notes.length ? esc(plural(notes.length, "Notiz ist", "Notizen sind")) + " noch kein Produkt" : "Kurz prüfen"}</h2>
+    <p class="sub">${noBbd.length ? esc(plural(noBbd.length, "Produkt hat", "Produkte haben")) + " noch keine Haltbarkeit." : "Notizen kommen nur von der Liste, nicht in den Vorrat."}</p>
+    <ul class="plist" id="prelist">${rows.join("")}</ul>
+    <div class="btnrow">
+      <button class="btn btn-primary full" id="pre-go">${I.pack}<span>Trotzdem ${esc(plural(total, "Sache", "Sachen"))} einsortieren</span></button>
+      <button class="linkbtn" id="pre-skip" style="justify-content:center">Diese nicht mehr fragen</button>
+    </div>`);
+  noBbd.forEach((it) => wireChips("pre-days-" + it.productId));
+  const startRun = async (skipAll) => {
+    const overrides = {};
+    const remember = [];
+    for (const it of noBbd) {
+      const v = chipValue("pre-days-" + it.productId); if (v == null) continue;
+      const days = num(v);
+      overrides[it.id] = { bbd: days === -1 ? "never" : addDays(days) };
+      const cb = $(`[data-remember="${it.productId}"]`); if (cb && cb.checked) remember.push({ pid: it.productId, days });
+    }
+    if (skipAll) NOTE_SKIP.add([...notes.map((n) => n.id), ...noBbd.map((n) => "p" + n.productId)]);
+    closeSheet();
+    for (const r of remember) {
+      if (PERM.denied("MASTER_DATA_EDIT")) break;
+      try { await api(`/api/objects/products/${r.pid}`, { method: "PUT", body: { default_best_before_days: r.days } }); const p = state.products.get(r.pid); if (p) p.bbdDays = r.days; }
+      catch (e) { if (!e.forbidden) DIAG.push({ kind: "wizard", msg: "bbd merken: " + (e.detail || e.message) }); }
+    }
+    // Produkte mit gleichem Produkt im Wagen: dieselbe Haltbarkeit übernehmen
+    for (const it of done) if (it.kind === "product" && !overrides[it.id]) { const same = noBbd.find((n) => n.productId === it.productId); if (same && overrides[same.id]) overrides[it.id] = overrides[same.id]; }
+    await runPutaway(done, { overrides });
+  };
+  $("#pre-go").addEventListener("click", () => startRun(false));
+  $("#pre-skip").addEventListener("click", () => startRun(true));
+  $$("[data-pre-wizard]").forEach((b) => b.addEventListener("click", () => {
+    const id = num(b.dataset.preWizard);
+    openWizard(id, { onDone: () => {
+      // zurück in die Vorprüfung mit frischem Stand
+      const d2 = state.shopping.filter((s) => s.done);
+      const n2 = d2.filter((s) => s.kind === "note" && !NOTE_SKIP.has(s.id));
+      const b2 = CFG.bookStock ? d2.filter((s) => s.kind === "product" && s.product && s.product.bbdDays === 0 && !NOTE_SKIP.has("p" + s.productId)) : [];
+      if (!d2.length) return;
+      if (n2.length || b2.length) openPrePutawaySheet(d2, n2, b2); else runPutaway(d2);
+    } });
+  }));
+}
+
+/* ---- Vorschläge: Kaufrhythmus + Mindestbestand + „ist alle“ ---- */
+const SUGG = { WINDOW: 120, MIN_RHYTHM: 3, MIN_EMPTY: 2, FACTOR: 1.2, STALE: 2.5, M_MIN: 3, M_MAX: 45, MAX_ROWS: 3, RECALC_MS: 6 * 3600 * 1000, SNOOZE_MIN: 14 };
+const SNOOZE = {
+  all() { return store.json("aemtli.sugg.snooze", {}) || {}; },
+  set(pid, until, since) { const a = this.all(); a[pid] = { until, since }; store.set("aemtli.sugg.snooze", JSON.stringify(a)); },
+  del(pid) { const a = this.all(); if (a[pid]) { delete a[pid]; store.set("aemtli.sugg.snooze", JSON.stringify(a)); } },
+};
+function buildSuggestions(log, stock, vol, todayISO) {
+  const dayOf = (ts) => String(ts || "").slice(0, 10);
+  const dayDiff = (a, b) => Math.round((new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000);
+  const byPid = new Map();
+  for (const r of Array.isArray(log) ? log : []) {
+    const pid = num(r.product_id); const d = dayOf(r.row_created_timestamp); if (!pid || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    if (!byPid.has(pid)) byPid.set(pid, new Map());
+    const m = byPid.get(pid); m.set(d, (m.get(d) || 0) + Math.abs(num(r.amount)));
+  }
+  const inStock = new Set((Array.isArray(stock) ? stock : []).filter((s) => num(s.amount) > 0).map((s) => num(s.product_id)));
+  const snooze = SNOOZE.all();
+  const parents = new Set([...state.products.values()].map((p) => p.parentId).filter((x) => x != null));
+  const onList = new Set(state.shopping.map((s) => s.productId).filter((x) => x != null));
+  const out = new Map(); let rhythmProducts = 0;
+  const consider = (pid, score, reason, qtyStock, m) => {
+    const p = state.products.get(pid);
+    if (!p || !p.active || p.noOwnStock || parents.has(pid) || onList.has(pid)) return;
+    const sn = snooze[pid];
+    if (sn && sn.until > todayISO) return;
+    const cur = out.get(pid);
+    if (!cur || score > cur.score) out.set(pid, { pid, name: p.name, score, reason, qtyStock: qtyStock || cur && cur.qtyStock || 1, m: m || (cur && cur.m) || null });
+  };
+  for (const [pid, days] of byPid) {
+    const ds = [...days.keys()].sort(); const n = ds.length; const last = ds[n - 1];
+    const sn = snooze[pid]; if (sn && sn.since && last > sn.since) SNOOZE.del(pid);   // neuer Kauf hebt Schlummern auf
+    const qtyMedian = (() => { const a = [...days.values()].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 1; })();
+    if (n >= SUGG.MIN_RHYTHM) {
+      rhythmProducts++;
+      const iv = []; for (let i = 1; i < n; i++) iv.push(dayDiff(ds[i], ds[i - 1]));
+      iv.sort((a, b) => a - b); let m = iv[Math.floor(iv.length / 2)]; m = Math.min(SUGG.M_MAX, Math.max(SUGG.M_MIN, m));
+      const since = dayDiff(todayISO, last);
+      if (since >= SUGG.FACTOR * m && since < SUGG.STALE * m) consider(pid, since / m, `sonst etwa alle ${m} Tage · zuletzt vor ${since} Tagen`, qtyMedian, m);
+    }
+    if (n >= SUGG.MIN_EMPTY && !inStock.has(pid)) consider(pid, 1.5, "nichts mehr im Vorrat", qtyMedian, null);
+  }
+  for (const mp of (vol && Array.isArray(vol.missing_products)) ? vol.missing_products : []) {
+    const pid = num(mp.id); const miss = num(mp.amount_missing);
+    consider(pid, 2, `unter Mindestbestand${miss ? ` (${fmtNum(miss)} fehlt)` : ""}`, miss > 0 ? miss : null, null);
+  }
+  for (const ep of (vol && Array.isArray(vol.expired_products)) ? vol.expired_products : []) consider(num(ep.product_id), 1.4, "Verbrauchsdatum überschritten", null, null);
+  const items = [...out.values()].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, "de"));
+  return { items, stats: { rhythmProducts, purchases: byPid.size } };
+}
+let suggBusy = false;
+async function computeSuggestions(force = false) {
+  if (suggBusy || !CFG.suggest || !CFG.configured || navigator.onLine === false) return;
+  const cached = SNAP.get("sugg");
+  if (!force && cached && Date.now() - cached.t < SUGG.RECALC_MS) { state.sugg = cached.data; return; }
+  suggBusy = true;
+  try {
+    const since = addDays(-SUGG.WINDOW);
+    const [log, stock, vol] = await Promise.all([
+      api(`/api/objects/stock_log?query%5B%5D=transaction_type%3Dpurchase&query%5B%5D=undone%3D0&query%5B%5D=row_created_timestamp%3E%3D${since}`),
+      api("/api/stock").catch(() => []),
+      api("/api/stock/volatile?due_soon_days=5").catch(() => null),
+    ]);
+    state.sugg = buildSuggestions(log, stock, vol, isoDate(new Date()));
+    SNAP.set("sugg", state.sugg);
+  } catch (e) { DIAG.push({ kind: "sugg", msg: e.detail || e.message }); }
+  finally { suggBusy = false; }
+}
+function visibleSuggestions() {
+  if (!CFG.suggest || !state.sugg || !Array.isArray(state.sugg.items)) return [];
+  const onList = new Set(state.shopping.map((s) => s.productId).filter((x) => x != null));
+  const today = isoDate(new Date()); const sn = SNOOZE.all();
+  return state.sugg.items.filter((s) => !onList.has(s.pid) && !(sn[s.pid] && sn[s.pid].until > today) && state.products.has(s.pid));
+}
+function suggestionsHTML() {
+  const items = visibleSuggestions();
+  if (!items.length) return "";
+  const row = (s) => {
+    const p = state.products.get(s.pid);
+    const qu = p.quPurchase != null ? p.quPurchase : p.quStock;
+    const f = factor(p.id, p.quStock, qu) || 1;
+    const qty = Math.max(0.001, round3((s.qtyStock || 1) * f));
+    return `<div class="row sugg"><span class="lead" aria-hidden="true">${I.bulb}</span><span class="body"><span class="nm">${esc(s.name)}</span><span class="meta">${esc(s.reason)}</span></span><span class="trail"><button class="btn btn-soft btn-sm" data-act="sugg-add" data-id="${s.pid}" data-qty="${qty}" aria-label="${esc(s.name)} auf die Liste, ${esc(amountLabel(qty, qu))}">${I.plus}<span>${esc(amountLabel(qty, qu))}</span></button><button class="iconbtn" data-act="sugg-snooze" data-id="${s.pid}" aria-label="Vorschlag „${esc(s.name)}“ ausblenden">${I.x}</button></span></div>`;
+  };
+  const head = items.slice(0, SUGG.MAX_ROWS), rest = items.slice(SUGG.MAX_ROWS);
+  return `<h2 class="sect">Vorschläge <span class="count">${items.length}</span></h2>
+    <section class="card" aria-label="Vorschläge">${head.map(row).join("")}${rest.length ? `<details class="help" style="margin:0 16px"><summary>${esc(plural(rest.length, "weiterer Vorschlag", "weitere Vorschläge"))}</summary>${rest.map(row).join("")}</details>` : ""}</section>`;
+}
+async function suggestionAdd(pid) {
+  const p = state.products.get(pid); if (!p) return;
+  const btn = $(`[data-act="sugg-add"][data-id="${pid}"]`); const qty = btn ? num(btn.dataset.qty) || 1 : 1;
+  const qu = p.quPurchase != null ? p.quPurchase : p.quStock;
+  const f = factor(p.id, qu, p.quStock) || 1;
+  if (btn) btn.disabled = true;
+  try {
+    await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, product_id: p.id, amount: round3(qty * f), ...(qu != null ? { qu_id: qu } : {}) } });
+    toast(`„${p.name}“ ergänzt`);
+    await loadShopping(); renderShopping(); updateBadges();
+  } catch (e) { if (btn) btn.disabled = false; toast(describeError(e), { bad: true }); }
+}
+function suggestionSnooze(pid) {
+  const s = (state.sugg && state.sugg.items || []).find((x) => x.pid === pid);
+  const days = Math.max(SUGG.SNOOZE_MIN, s && s.m ? Math.round(s.m) : 0);
+  SNOOZE.set(pid, addDays(days), isoDate(new Date()));
+  renderShopping();
+  toast("Erst wieder nach dem nächsten Kauf.");
+}
+
+/* ---- Vorrat: Abgelaufenes aufräumen (clientseitig, 1× täglich pro Gerät) ---- */
+const EXPIRE = { GRACE_MHD: 7, GRACE_USE: 1, MAX_PER_RUN: 25, KEEP_DAYS: 60 };
+const KEEP = {   // nach „Rückgängig“ nicht erneut aufräumen (pro Gerät)
+  all() { const a = store.json("aemtli.expire.keep", {}) || {}; const cut = Date.now() - EXPIRE.KEEP_DAYS * 86400000; let ch = false; for (const k of Object.keys(a)) if (a[k] < cut) { delete a[k]; ch = true; } if (ch) store.set("aemtli.expire.keep", JSON.stringify(a)); return a; },
+  add(ids) { const a = this.all(); for (const id of ids) a[id] = Date.now(); store.set("aemtli.expire.keep", JSON.stringify(a)); },
+};
+// Reine Funktion (ohne DOM/API) – später 1:1 in den Server-Worker portierbar.
+function cleanupPlan(entries, products, todayISO, { graceMhd = EXPIRE.GRACE_MHD, graceUse = EXPIRE.GRACE_USE, keep = new Set() } = {}) {
+  const out = [];
+  const dayDiff = (iso) => Math.round((new Date(todayISO + "T12:00:00") - new Date(iso + "T12:00:00")) / 86400000);
+  for (const e of Array.isArray(entries) ? entries : []) {
+    const bbd = String(e.best_before_date || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(bbd) || bbd >= "2999-01-01") continue;
+    const amount = num(e.amount); if (!(amount > 0)) continue;
+    if (keep.has(String(e.stock_id))) continue;
+    const p = products.get(num(e.product_id));
+    if (!p || !p.active || p.tare || p.noOwnStock) continue;
+    const over = dayDiff(bbd);
+    if (over < (p.dueType === 2 ? graceUse : graceMhd)) continue;
+    out.push({ id: num(e.id), stock_id: String(e.stock_id), product_id: num(e.product_id), amount, bbd, over, name: p.name, dueType: p.dueType, quStock: p.quStock });
+  }
+  return out.sort((a, b) => b.over - a.over);
+}
+// Genau diesen Bestandseintrag ausbuchen. Idempotent: zweiter Aufruf → „schon weg“.
+async function consumeEntry(e, spoiled, retried = false) {
+  const body = { amount: round3(e.amount), spoiled: !!spoiled, stock_entry_id: e.stock_id };
+  try {
+    const r = await api(`/api/stock/products/${e.product_id}/consume`, { method: "POST", body });
+    return Array.isArray(r) && r.length && r[0].transaction_id ? { ok: true, tx: r[0].transaction_id } : { ok: false, gone: true };
+  } catch (err) {
+    if (err.status === 400 && /no transaction was found/i.test(err.detail || "")) return { ok: false, gone: true };
+    if (err.status === 400 && /current stock|more than|not available/i.test(err.detail || "") && !retried) {
+      const rows = await api(`/api/objects/stock?query%5B%5D=stock_id%3D${encodeURIComponent(e.stock_id)}`).catch(() => null);
+      const cur = Array.isArray(rows) ? rows[0] : null;
+      if (cur && num(cur.amount) > 0) return consumeEntry({ ...e, amount: num(cur.amount) }, spoiled, true);
+      return { ok: false, gone: true };
+    }
+    throw err;
+  }
+}
+async function fetchExpiredPlan() {
+  const today = isoDate(new Date());
+  const entries = await api(`/api/objects/stock?query%5B%5D=best_before_date%3C${addDays(-EXPIRE.GRACE_USE + 1)}`);
+  return cleanupPlan(entries, state.products, today, { keep: new Set(Object.keys(KEEP.all())) });
+}
+let cleanupBusy = false;
+async function maybeCleanup() {
+  if (cleanupBusy || !CFG.configured || !CFG.bookStock || navigator.onLine === false || document.visibilityState !== "visible" || state.running || state.fromCache) return;
+  if (CFG.expireAuto === false) return;
+  if (PERM.denied("STOCK_CONSUME")) return;
+  const today = isoDate(new Date());
+  if (store.get("aemtli.expire.lastRun") === today) return;
+  cleanupBusy = true;
+  try {
+    const plan = await fetchExpiredPlan();
+    if (!plan.length) { store.set("aemtli.expire.lastRun", today); return; }
+    if (CFG.expireAuto === null) { openCleanupConsentSheet(plan); return; }   // erster Lauf: einmal fragen
+    store.set("aemtli.expire.lastRun", today);
+    await runCleanup(plan);
+  } catch (e) { DIAG.push({ kind: "expire", msg: e.detail || e.message }); }
+  finally { cleanupBusy = false; }
+}
+async function runCleanup(plan) {
+  const todo = plan.slice(0, EXPIRE.MAX_PER_RUN);
+  const rows = []; let gone = 0, failed = 0;
+  for (const e of todo) {
+    try {
+      const r = await consumeEntry(e, CFG.expireSpoiled);
+      if (r.ok) rows.push({ tx: r.tx, name: e.name, amount: e.amount, quStock: e.quStock, stock_id: e.stock_id }); else gone++;
+    } catch (err) {
+      if (err.forbidden) { failed++; break; }
+      if (err.status === 0) { store.del("aemtli.expire.lastRun"); failed++; break; }   // Netz weg → morgen erneut
+      failed++; DIAG.push({ kind: "expire", msg: `${e.name}: ${err.detail || err.message}` });
+    }
+  }
+  if (rows.length) store.set("aemtli.expire.last", JSON.stringify({ at: Date.now(), rows }));
+  if (rows.length) toast(`${plural(rows.length, "abgelaufene Sache", "abgelaufene Sachen")} aus dem Vorrat genommen${plan.length > todo.length ? ` (${plan.length - todo.length} morgen)` : ""}`, { action: { label: "Rückgängig", fn: undoCleanup }, duration: 9000 });
+  else if (failed && !gone) toast("Aufräumen des Vorrats ist fehlgeschlagen – Details in der Diagnose.", { bad: true });
+  computeSuggestions(true).then(() => { if (state.tab === "shopping") renderShopping(); });
+}
+async function undoCleanup() {
+  const last = store.json("aemtli.expire.last", null); if (!last || !last.rows) return;
+  hideToast();
+  let ok = 0, fail = 0;
+  for (const r of last.rows) { try { await api(`/api/stock/transactions/${encodeURIComponent(r.tx)}/undo`, { method: "POST", body: {} }); ok++; } catch (_) { fail++; } }
+  KEEP.add(last.rows.map((r) => r.stock_id));
+  store.del("aemtli.expire.last");
+  toast(fail ? `Rückgängig nur teilweise (${ok} von ${last.rows.length}). In Grocy prüfen.` : `${plural(ok, "Sache", "Sachen")} wieder im Vorrat. Bleibt dort, bis du das Datum in Grocy anpasst.`, { bad: !!fail, duration: 7000 });
+  if (state.tab === "settings") renderSettings();
+}
+function openCleanupConsentSheet(plan) {
+  const li = plan.slice(0, 12).map((e) => `<li><span class="st warn">${I.alert}</span><span class="b"><div>${esc(e.name)}</div><div class="m">${esc(amountLabel(e.amount, e.quStock))} · ${e.dueType === 2 ? "Verbrauchsdatum" : "MHD"} vor ${esc(plural(e.over, "Tag", "Tagen"))} (${esc(fmtDate(e.bbd))})</div></span></li>`).join("");
+  openSheet(`
+    <h2 id="sheet-title">${esc(plural(plan.length, "abgelaufene Sache", "abgelaufene Sachen"))} im Vorrat</h2>
+    <p class="sub">Ämtli kann so etwas künftig täglich still erledigen: MHD 7 Tage nach Ablauf, Verbrauchsdatum am Tag danach. Die Buchung erscheint in Grocy unter deinem Namen; Rückgängig geht jederzeit.</p>
+    <ul class="plist">${li}${plan.length > 12 ? `<li><span class="st wait">·</span><span class="b"><div class="m">… und ${plan.length - 12} weitere</div></span></li>` : ""}</ul>
+    <div class="btnrow">
+      <button class="btn btn-primary full" id="cl-go">Aus dem Vorrat nehmen & künftig automatisch</button>
+      <button class="btn btn-ghost full" id="cl-once">Nur jetzt aufräumen</button>
+      <button class="linkbtn" id="cl-no" style="justify-content:center">Nicht automatisch aufräumen</button>
+    </div>`);
+  const today = isoDate(new Date());
+  $("#cl-go").addEventListener("click", async () => { CFG.expireAuto = true; store.set("aemtli.expire.lastRun", today); closeSheet(); await runCleanup(plan); });
+  $("#cl-once").addEventListener("click", async () => { store.set("aemtli.expire.lastRun", today); closeSheet(); await runCleanup(plan); });
+  $("#cl-no").addEventListener("click", () => { CFG.expireAuto = false; closeSheet(); toast("Aufräumen bleibt aus. In den Einstellungen änderbar."); });
+}
+
+/* ---- Pflege-Sheet: Haltbarkeiten für Altprodukte ohne Default ---- */
+function openMaintainSheet() {
+  const lastBuy = new Map();
+  for (const s of (state.sugg && state.sugg.items) || []) lastBuy.set(s.pid, 1);
+  const prods = [...state.products.values()].filter((p) => p.active && !p.noOwnStock && p.parentId == null && p.bbdDays === 0).sort((a, b) => (lastBuy.has(b.id) - lastBuy.has(a.id)) || a.name.localeCompare(b.name, "de"));
+  if (!prods.length) { toast("Alle Produkte haben eine Haltbarkeit."); return; }
+  const li = prods.map((p) => { const h = heuristic(p.name); const d = h ? h.days : -1; return `<li data-pid="${p.id}"><span class="st wait">·</span><span class="b"><div>${esc(p.name)}</div>${shelfChipsHTML("mt-" + p.id, d)}</span></li>`; }).join("");
+  openSheet(`
+    <h2 id="sheet-title">Haltbarkeiten pflegen</h2>
+    <p class="sub">${esc(plural(prods.length, "Produkt hat", "Produkte haben"))} noch keine Haltbarkeit. Vorgeschlagen aus dem Namen – anpassen und speichern.</p>
+    <div class="pbar" hidden id="mt-bar"><span id="mt-barfill" style="width:0%"></span></div>
+    <ul class="plist">${li}</ul>
+    <div class="btnrow"><button class="btn btn-primary full" id="mt-save">Alle speichern</button></div>`);
+  prods.forEach((p) => wireChips("mt-" + p.id));
+  $("#mt-save").addEventListener("click", async () => {
+    const btn = $("#mt-save"); btn.disabled = true; sheetLocked = true;
+    const bar = $("#mt-bar"); bar.hidden = false;
+    let ok = 0, fail = 0, stop = false;
+    for (let i = 0; i < prods.length; i++) {
+      const p = prods[i]; const v = chipValue("mt-" + p.id); const days = v == null ? null : num(v);
+      const li = $(`li[data-pid="${p.id}"] .st`);
+      if (days != null && !stop) {
+        try { await api(`/api/objects/products/${p.id}`, { method: "PUT", body: { default_best_before_days: days } }); p.bbdDays = days; ok++; if (li) { li.className = "st ok"; li.textContent = "✓"; } }
+        catch (e) { fail++; if (li) { li.className = "st bad"; li.textContent = "!"; } if (e.forbidden) { stop = true; toast(describeError(e), { bad: true, duration: 7000 }); } }
+      }
+      $("#mt-barfill").style.width = `${Math.round(((i + 1) / prods.length) * 100)}%`;
+    }
+    sheetLocked = false; closeSheet();
+    if (ok) toast(`${plural(ok, "Haltbarkeit", "Haltbarkeiten")} gespeichert${fail ? `, ${fail} nicht` : ""}`, { bad: !!fail });
+    try { await loadMasters(true); } catch (_) {}
+    if (state.tab === "settings") renderSettings();
+  });
+}
+
+/* ---- Nach jedem erfolgreichen Laden der Einkaufsliste ---- */
+function afterShoppingLoaded() {
+  NOTE_SKIP.prune(new Set(state.shopping.map((s) => s.id)));
+  computeSuggestions().then(() => { if (state.tab === "shopping" && !sheetOpen) renderShopping(); });
+  setTimeout(() => { if (!sheetOpen) maybeCleanup(); }, 3000);
 }
 
 /* ====================================================================== */
@@ -1437,18 +2325,28 @@ function openSheet(html, { locked = false } = {}) {
   s.innerHTML = `<div class="grabber" aria-hidden="true"></div>` + html;
   s.classList.add("show"); b.classList.add("show");
   sheetLocked = locked;
+  const wasOpen = sheetOpen;
   if (!sheetOpen) { sheetOpen = true; try { history.pushState({ sheet: true }, ""); } catch (_) {} }
-  const first = s.querySelector("button, input, select, [tabindex]"); if (first) { try { first.focus({ preventScroll: true }); } catch (_) {} }
+  // Nur beim Öffnen fokussieren – ein Re-Render (z. B. Chip gewählt) soll die Tastatur nicht hochholen.
+  if (!wasOpen) { const first = s.querySelector("button, select, [tabindex]"); if (first) { try { first.focus({ preventScroll: true }); } catch (_) {} } }
 }
 function closeSheet() {
   if (!sheetOpen) return;
   if (sheetLocked) return;
+  stopScan();
   const s = $("#sheet"), b = $("#backdrop");
   s.classList.remove("show"); b.classList.remove("show"); s.innerHTML = "";
   sheetOpen = false;
   if (history.state && history.state.sheet) { try { history.back(); } catch (_) {} }
 }
-window.addEventListener("popstate", () => { if (sheetOpen && !sheetLocked) { const s = $("#sheet"), b = $("#backdrop"); s.classList.remove("show"); b.classList.remove("show"); s.innerHTML = ""; sheetOpen = false; } });
+// Zurück-Geste/-Taste schließt das Sheet. Landet die History dabei auf einem Sheet-Eintrag
+// (Sheet wurde direkt nach dem Schließen neu geöffnet, z. B. Wizard → Vorprüfung), bleibt es offen.
+window.addEventListener("popstate", (ev) => {
+  if (!sheetOpen || sheetLocked) return;
+  if (ev.state && ev.state.sheet) return;
+  stopScan();
+  const s = $("#sheet"), b = $("#backdrop"); s.classList.remove("show"); b.classList.remove("show"); s.innerHTML = ""; sheetOpen = false;
+});
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheetOpen) closeSheet(); });
 
 /* ---- Router ---- */
@@ -1466,7 +2364,7 @@ async function go(tab) {
   else { tab === "shopping" ? renderShopping() : renderChores(); }
   view.setAttribute("aria-busy", "true");
   try {
-    if (tab === "shopping") { await loadShopping(); renderShopping(); repairJournal(); }
+    if (tab === "shopping") { await loadShopping(); renderShopping(); repairJournal(); afterShoppingLoaded(); }
     else { await loadChores(); state.fromCache = false; renderChores(); }
     setBanner("auth", null); setBanner("proxy", null);
     updateBadges();
@@ -1496,7 +2394,7 @@ async function refresh({ quiet = false } = {}) {
   const btn = $("#btn-refresh"); if (btn) btn.classList.add("spin");
   const tab = state.tab;
   try {
-    if (tab === "shopping") { await loadShopping(); renderShopping(); repairJournal(); }
+    if (tab === "shopping") { await loadShopping(); renderShopping(); repairJournal(); afterShoppingLoaded(); }
     else if (tab === "chores") { await loadChores(); state.fromCache = false; renderChores(); }
     updateBadges(); setBanner("auth", null); setBanner("proxy", null); reflectOnline();
   } catch (err) {
@@ -1525,10 +2423,13 @@ function onViewClick(e) {
   const act = t.dataset.act, id = num(t.dataset.id);
   if (act === "toggle") toggleShopping(id);
   else if (act === "adjust") openAdjustSheet(id);
+  else if (act === "wizard") openWizard(id);
   else if (act === "remove-only") removeOnly(id);
   else if (act === "recheck") recheck(id);
   else if (act === "undo-last") undoLast();
   else if (act === "putaway-all") putAwayAll();
+  else if (act === "sugg-add") suggestionAdd(id);
+  else if (act === "sugg-snooze") suggestionSnooze(id);
   else if (act === "chore-done") executeChore(id);
 }
 function wire() {
@@ -1539,7 +2440,12 @@ function wire() {
   $("#ctawrap").addEventListener("click", safe(onViewClick));
   $("#toast-act").addEventListener("click", safe(() => { const a = toastAction; hideToast(); if (a) a.fn(); }));
   $("#backdrop").addEventListener("click", closeSheet);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && !sheetOpen) refresh({ quiet: true }); });
+  // Android-Tastatur: fokussiertes Feld im Sheet sichtbar halten.
+  $("#sheet").addEventListener("focusin", (e) => { if (e.target.matches("input, select, textarea")) setTimeout(() => { try { e.target.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {} }, 150); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") stopScan();
+    if (document.visibilityState === "visible" && !sheetOpen) refresh({ quiet: true });
+  });
   window.addEventListener("offline", reflectOnline);
   window.addEventListener("online", () => { reflectOnline(); refresh({ quiet: true }); });
 }

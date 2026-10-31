@@ -27,10 +27,36 @@ Content, kein CORS, kein Tailscale-Umweg für die Grocy-Anbindung.
 - **Oberfläche:** helles und dunkles Design (folgt dem System, umschaltbar), große
   Touch-Ziele, Kontraste nach WCAG AA, Diagnose-Ansicht in den Einstellungen.
 
-Ämtli legt bewusst **keine Produkte, Aufgaben oder Lagerorte an** – Stammdaten
-pflegt V in Grocy. Wichtig für gute Ergebnisse: bei Produkten in Grocy die
-**Standard-Haltbarkeit (Tage)** pflegen. Fehlt sie, bucht Ämtli „unbegrenzt
-haltbar“ und sagt das im Ergebnis („ohne Haltbarkeitsdatum“).
+### Neu in Version 2.1
+
+- **Notiz → Produkt (Wizard):** Freie Einträge bleiben „Notizen“ (schnell beim
+  Schreiben der Liste). Das **„!“** an einer Notiz öffnet ein Sheet, das alle
+  Pflichtfelder von Grocy bereits ausgefüllt zeigt: Name, Lagerort, Einheit,
+  Haltbarkeit. Vorbelegt aus (in dieser Reihenfolge) ähnlichen Produkten in
+  Grocy, dem Barcode (Kamera-Scan auf Android-Chrome; Grocy fragt Open Food Facts),
+  dem Notiztext, einer Keyword-Tabelle (Milch → Kühlschrank, 7 Tage …), euren
+  Grocy-Voreinstellungen. Gibt es das Produkt schon, wird nur **verknüpft**.
+  Normalfall: zwei Tipps. Direkt nach dem Eintippen einer Notiz bietet der Toast
+  „Als Produkt anlegen“ an. **Vor dem Einsortieren** erinnert Ämtli einmal pro
+  Notiz daran, dass sie nicht in den Vorrat kommt, und fragt bei Produkten ohne
+  Haltbarkeit nach dem Datum („Trotzdem einsortieren“ geht immer).
+  Anlegen braucht in Grocy das Recht **„Stammdaten bearbeiten“**; ohne dieses
+  Recht bietet Ämtli nur das Verknüpfen an.
+- **Vorschläge:** Unter der Eingabezeile erscheint eine leise Karte mit maximal
+  drei Produkten, die laut Kaufrhythmus (mindestens drei Käufe in 120 Tagen,
+  überfällig ab dem 1,2-Fachen des üblichen Abstands) wohl fehlen, dazu Produkte
+  unter Mindestbestand. „+“ setzt sie mit der üblichen Menge auf die Liste, „×“
+  schlummert bis zum nächsten Kauf. Keine Push, kein Badge.
+- **Vorrat aufräumen:** Beim ersten Fund fragt Ämtli einmal; danach nimmt es
+  täglich still Einträge aus dem Vorrat, deren MHD 7 Tage überschritten ist
+  (Verbrauchsdatum: am Tag danach). Mit Toast und **Rückgängig**. Die Buchung
+  läuft unter dem angemeldeten Nutzer; am besten nur auf einem Gerät aktiv.
+  Einstellungen → Vorrat: Schalter, „verdorben statt verbraucht“, letzte
+  Entfernung, **„Haltbarkeiten pflegen“** für Altprodukte ohne Default.
+
+Ämtli legt weiterhin **keine Aufgaben, Einheiten oder Lagerorte an** – das bleibt
+Grocy. Produkte ohne Haltbarkeit bekommen beim Einsortieren „unbegrenzt haltbar“
+(2999-12-31); der Wizard und das Pflege-Sheet räumen das nach und nach auf.
 
 ---
 
@@ -203,3 +229,12 @@ Innerhalb des laufenden Ämtli-Add-ons lässt sich `/grocy/` analog testen:
   und schicken. In Grocy zeigt das Bestandsprotokoll Ämtli-Buchungen mit der Notiz
   `aemtli:sl-<Zeile>`; jede lässt sich dort per „Rückgängig“ zurücknehmen.
 - **Anderer Grocy-Slug/Port:** `grocy_upstream` anpassen.
+- **„Dein Grocy-Konto darf das nicht (Recht Stammdaten bearbeiten fehlt)“:** Der
+  Wizard will ein Produkt anlegen, der Grocy-Benutzer hat das Recht nicht. In Grocy
+  → Benutzer → Berechtigungen `MASTER_DATA_EDIT` setzen, oder nur verknüpfen.
+- **Barcode-Scan fehlt:** gibt es nur in Chrome auf Android (BarcodeDetector-API)
+  und nur über die direkte HTTPS-Adresse, nicht unter Ingress. Beim ersten Scan
+  fragt der Browser nach der Kamera.
+- **Open Food Facts:** Das Add-on proxyt `off/product/<barcode>` und `off/search`
+  server-seitig (Cache 7 Tage, TLS-geprüft). Fällt OFF aus, bleibt der Wizard
+  nutzbar – dann nur ohne Kategorie-Vorschlag.

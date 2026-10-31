@@ -27,7 +27,7 @@ bashio::log.info "Grocy-Upstream: ${grocy_upstream} (Host: ${grocy_host})"
 # Temp-/Arbeitsverzeichnisse für nginx anlegen
 mkdir -p \
     /tmp/nginx/body /tmp/nginx/proxy /tmp/nginx/fastcgi /tmp/nginx/scgi /tmp/nginx/uwsgi \
-    /var/log/nginx /var/lib/nginx
+    /tmp/nginx/offcache /var/log/nginx /var/lib/nginx
 
 # App-Version in die Laufzeit-Konfiguration schreiben (Anzeige in der Diagnose).
 addon_version="$(bashio::addon.version 2>/dev/null)" || addon_version=""

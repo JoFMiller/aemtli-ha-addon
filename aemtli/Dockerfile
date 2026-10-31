@@ -2,9 +2,9 @@ ARG BUILD_FROM=ghcr.io/hassio-addons/base:18.2.0
 # hadolint ignore=DL3006
 FROM ${BUILD_FROM}
 
-# nginx installieren
+# nginx + CA-Zertifikate (für den Open-Food-Facts-Proxy mit TLS-Prüfung)
 # hadolint ignore=DL3018
-RUN apk add --no-cache nginx
+RUN apk add --no-cache nginx ca-certificates
 
 # Add-on-Dateien (nginx-Konfig, s6-Services, statische PWA) ins Image backen
 COPY rootfs /
