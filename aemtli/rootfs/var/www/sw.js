@@ -2,7 +2,7 @@
    Strategie: network-first für eigene Assets (Cache nur als Offline-Fallback),
    damit geänderte index.html/app.js sofort ankommen. Fehlerantworten werden nie
    gecacht. Der Grocy-Proxy (/grocy/) und fremde Origins werden nicht angefasst. */
-const CACHE = "aemtli-v5";
+const CACHE = "aemtli-v6";
 const SHELL = [
   "./",
   "./index.html",

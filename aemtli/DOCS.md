@@ -17,8 +17,11 @@ Content, kein CORS, kein Tailscale-Umweg für die Grocy-Anbindung.
   Einkaufs-Einheit), im Laden abhaken → „Im Wagen“, zu Hause **ein Tipp auf
   „N Sachen einsortieren“**: Ämtli bucht jede Produktzeile in den Grocy-Vorrat
   (Lager-Einheit, Haltbarkeit aus den Produkt-Defaults) und nimmt sie von der Liste.
-  Danach 10 Minuten **Rückgängig**. Über „⋯“ an einer Wagen-Zeile lassen sich
-  Menge, Haltbarkeit und Lagerort für diese eine Buchung anpassen.
+  Danach 10 Minuten **Rückgängig**. Die **Menge** ändert ihr mit − und + an jeder
+  Zeile, auf der Liste wie im Wagen; ein Tipp auf die Zahl erlaubt direkte Eingabe.
+  Beim Eintippen wählt ihr zuerst Produkt und Menge, „Hinzufügen“ legt die Zeile an.
+  Über „⋯“ an einer Wagen-Zeile lassen sich Haltbarkeit und Lagerort für diese eine
+  Buchung anpassen.
 - **Aufgaben:** Hausarbeiten nach Fälligkeit gruppiert, ein Tipp = erledigt (mit
   Rückgängig). Grocy berechnet die nächste Fälligkeit und rotiert die Zuweisung.
 - **Robust:** Netzabbruch mitten im Einsortieren führt nie zu Doppelbuchungen

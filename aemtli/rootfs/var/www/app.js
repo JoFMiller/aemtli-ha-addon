@@ -456,6 +456,7 @@ async function loadShopping() {
     await loadMasters(true);                                   // neues Produkt seit dem letzten Laden
   }
   state.shopping = items.map(mapShoppingItem).sort(shoppingCmp);
+  for (const [id, p] of qtyPending) { const it = state.shopping.find((s) => s.id === id); if (it) applyQty(it, p.value); }   // noch nicht gespeicherte Mengen
   state.fromCache = false;
   SNAP.set("shopping", items);
   // Journal-Einträge zu Zeilen, die es nicht mehr gibt, sind erledigt.
@@ -524,37 +525,112 @@ function kindChip(it) {
   return "";
 }
 // „!“-Knopf an Notiz-Zeilen: öffnet den Produkt-Wizard.
-const wizardBtnHTML = (it, busy) => `<button class="iconbtn warnbtn" data-act="wizard" data-id="${it.id}" aria-label="„${esc(it.name)}“ als Produkt anlegen" title="Als Produkt anlegen" ${busy ? "disabled" : ""}>${I.alert}</button>`;
+const noteBtnHTML = (it, busy) => `<button class="notebtn" data-act="wizard" data-id="${it.id}" aria-label="„${esc(it.name)}“ als Produkt anlegen" title="Als Produkt anlegen" ${busy ? "disabled" : ""}>${I.alert}<span>Notiz</span></button>`;
+
+/* ---- Menge direkt an der Zeile: sofort anzeigen, gebündelt und der Reihe nach speichern ---- */
+const QTY_SAVE_MS = 600;
+const qtyPending = new Map();   // Zeilen-ID → { timer, value, amount }
+let qtyChain = Promise.resolve(), qtyFailed = false;
+// Schrittweite: Gramm/Milliliter in Hundertern, alles andere in Einern.
+const qtyStepOf = (quId) => { const u = state.units.get(num(quId)); return u && /^(g|gramm|ml|milliliter)$/.test(normKey(u.name)) ? 100 : 1; };
+// Nächstes Vielfache der Schrittweite (0,2 → 1, 1,5 → 2 bzw. 1); null = kleiner geht es nicht.
+function qtyNext(v, dir, step) {
+  const q = round3(v / step);
+  const n = (dir > 0 ? Math.floor(q) + 1 : Math.ceil(q) - 1) * step;
+  return n > 0 ? n : null;
+}
+// Listenzeile auf einen Wert in der Anzeige-Einheit setzen; gespeichert wird in der Lager-Einheit.
+function applyQty(it, v) {
+  const p = it.product;
+  let stock = v;
+  if (p && it.dispQu != null && p.quStock != null && it.dispQu !== p.quStock) {
+    const f = factor(p.id, it.dispQu, p.quStock), back = factor(p.id, p.quStock, it.dispQu);
+    if (f != null) stock = v * f; else if (back != null) stock = v / back;
+  }
+  it.amount = Math.max(0.001, round3(stock));
+  it.dispValue = v;
+  it.stockHint = p && it.dispQu != null && p.quStock != null && it.dispQu !== p.quStock ? amountLabel(it.amount, p.quStock) : "";
+}
+const qtyMetaText = (it) => `${it.dispQu != null && state.units.has(num(it.dispQu)) ? unitLabel(it.dispQu, it.dispValue) : ""}${it.done && it.stockHint ? ` → ${it.stockHint}` : ""}`;
+function qtyStepperHTML(it, busy) {
+  const atMin = qtyNext(it.dispValue, -1, qtyStepOf(it.dispQu)) == null;
+  return `<span class="qty" role="group" aria-label="Menge ${esc(it.name)}">
+    <button type="button" class="qbtn" data-act="qty-dec" data-id="${it.id}" aria-label="${esc(it.name)}: weniger" ${busy || atMin ? "disabled" : ""}>−</button>
+    <input class="qtyin" type="number" data-id="${it.id}" value="${esc(String(it.dispValue))}" min="0" step="any" inputmode="decimal" enterkeyhint="done" aria-label="Menge ${esc(it.name)}" ${busy ? "disabled" : ""} />
+    <button type="button" class="qbtn" data-act="qty-inc" data-id="${it.id}" aria-label="${esc(it.name)}: mehr" ${busy ? "disabled" : ""}>+</button>
+  </span>`;
+}
+// Nur die Zeile anfassen: kein Neuzeichnen, das einen Tipp auf die Einsortier-Leiste verschlucken könnte.
+function patchQtyRow(it) {
+  const inp = view.querySelector(`.qtyin[data-id="${it.id}"]`); if (!inp) return;
+  const row = inp.closest(".row");
+  if (document.activeElement !== inp) inp.value = String(it.dispValue);
+  const minus = row.querySelector('[data-act="qty-dec"]'); if (minus) minus.disabled = qtyNext(it.dispValue, -1, qtyStepOf(it.dispQu)) == null;
+  const meta = row.querySelector(".qtymeta"); if (meta) meta.textContent = qtyMetaText(it);
+}
+function setQty(it, v) {
+  if (navigator.onLine === false) { toast("Gerade kein Netz. Probier es gleich nochmal."); patchQtyRow(it); return; }
+  applyQty(it, v);
+  patchQtyRow(it);
+  const prev = qtyPending.get(it.id); if (prev) clearTimeout(prev.timer);
+  qtyPending.set(it.id, { value: v, amount: it.amount, timer: setTimeout(() => saveQty(it.id), QTY_SAVE_MS) });
+}
+function bumpQty(id, dir) {
+  const it = state.shopping.find((s) => s.id === id);
+  if (!it || JOURNAL.get(id) || (it.done && state.running)) return;
+  const n = qtyNext(it.dispValue, dir, qtyStepOf(it.dispQu));
+  if (n != null) setQty(it, n);
+}
+function onQtyChange(e) {
+  if (!e.target.matches(".qtyin[data-id]")) return;
+  const id = num(e.target.dataset.id), it = state.shopping.find((s) => s.id === id);
+  if (!it) return;
+  const v = round3(num(e.target.value));
+  if (v > 0 && v !== it.dispValue) setQty(it, v);
+  e.target.value = String(it.dispValue);                     // leer/0 → alter Wert
+}
+function saveQty(id) {
+  const p = qtyPending.get(id); if (!p) return qtyChain;
+  clearTimeout(p.timer); qtyPending.delete(id);
+  state.busy.add("q" + id);                                  // refresh() wartet, sonst springt die Anzeige zurück
+  qtyChain = qtyChain.then(async () => {
+    let failed = false;
+    try { await api(`/api/objects/shopping_list/${id}`, { method: "PUT", body: { amount: p.amount } }); }
+    catch (err) {
+      if (!isGone(err)) { failed = true; qtyFailed = true; toast(describeError(err), { bad: true }); if (isAuthErr(err)) showAuthBanner(err); }
+    } finally { state.busy.delete("q" + id); }
+    if (failed) setTimeout(() => refresh({ quiet: true }), 0);   // Anzeige zurück auf den Stand von Grocy
+  });
+  return qtyChain;
+}
+// Vor allem, was den Stand aus Grocy liest oder bucht. false = mindestens eine Menge kam nicht an.
+async function flushQty() {
+  qtyFailed = false;
+  for (const id of [...qtyPending.keys()]) saveQty(id);
+  await qtyChain;
+  return !qtyFailed;
+}
+
 function openRowHTML(it) {
   const busy = state.busy.has("s" + it.id);
-  const amt = it.kind === "note" ? "" : amountLabel(it.dispValue, it.dispQu);
-  if (it.kind === "note") return `
+  const isNote = it.kind === "note";
+  return `
     <div class="row">
       <button class="lead" data-act="toggle" data-id="${it.id}" role="checkbox" aria-checked="false"
               aria-label="${esc(it.name)}, in den Wagen legen" ${busy ? 'aria-disabled="true"' : ""}>
         <span class="check" aria-hidden="true"></span>
       </button>
       <span class="body tap" data-act="toggle" data-id="${it.id}">
-        <span class="nm">${esc(it.name)} ${kindChip(it)}</span>
-        ${it.amount > 1 ? `<span class="meta">${esc(fmtNum(it.amount))}×</span>` : ""}
+        <span class="nm">${esc(it.name)} ${isNote ? "" : kindChip(it)}</span>
+        ${isNote ? noteBtnHTML(it, busy) : `<span class="meta qtymeta">${esc(qtyMetaText(it))}</span>`}
       </span>
-      <span class="trail">${wizardBtnHTML(it, busy)}</span>
+      <span class="trail">${qtyStepperHTML(it, busy)}</span>
     </div>`;
-  return `
-    <button class="row" data-act="toggle" data-id="${it.id}" role="checkbox" aria-checked="false"
-            aria-label="${esc(it.name)}${amt ? ", " + esc(amt) : ""}, in den Wagen legen" ${busy ? 'aria-disabled="true"' : ""}>
-      <span class="lead" aria-hidden="true"><span class="check"></span></span>
-      <span class="body">
-        <span class="nm">${esc(it.name)} ${kindChip(it)}</span>
-        ${amt ? `<span class="meta">${esc(amt)}</span>` : ""}
-      </span>
-    </button>`;
 }
 function cartRowHTML(it) {
   const busy = state.busy.has("s" + it.id) || state.running;
-  const amt = it.kind === "note" ? "" : amountLabel(it.dispValue, it.dispQu);
+  const isNote = it.kind === "note";
   const jm = journalMeta(it);
-  const hint = it.stockHint ? ` → ${esc(it.stockHint)}` : "";
   return `
     <div class="row done">
       <button class="lead" data-act="toggle" data-id="${it.id}" role="checkbox" aria-checked="true"
@@ -562,11 +638,12 @@ function cartRowHTML(it) {
         <span class="check on" aria-hidden="true">${I.check}</span>
       </button>
       <span class="body">
-        <span class="nm">${esc(it.name)} ${kindChip(it)}</span>
-        ${jm ? `<span class="meta ${jm.cls}">${esc(jm.text)}</span>` : (amt ? `<span class="meta">${esc(amt)}${hint}</span>` : "")}
+        <span class="nm">${esc(it.name)} ${isNote ? "" : kindChip(it)}</span>
+        ${jm ? `<span class="meta ${jm.cls}">${esc(jm.text)}</span>` : (isNote ? noteBtnHTML(it, busy) : `<span class="meta qtymeta">${esc(qtyMetaText(it))}</span>`)}
       </span>
       <span class="trail">
-        ${it.kind === "note" ? wizardBtnHTML(it, busy) : `<button class="iconbtn" data-act="adjust" data-id="${it.id}" aria-label="${esc(it.name)} anpassen" ${busy ? "disabled" : ""}>${I.more}</button>`}
+        ${jm ? "" : qtyStepperHTML(it, busy)}
+        ${isNote ? "" : `<button class="iconbtn" data-act="adjust" data-id="${it.id}" aria-label="${esc(it.name)} anpassen" ${busy ? "disabled" : ""}>${I.more}</button>`}
       </span>
     </div>
     ${jm && jm.btn ? `<div class="rowbtns"><button class="btn btn-ghost btn-sm" data-act="${jm.btn.act}" data-id="${it.id}" ${busy ? "disabled" : ""}>${esc(jm.btn.label)}</button></div>` : ""}`;
@@ -593,10 +670,19 @@ function renderShopping() {
     </div>
     <div class="addwrap">
       <form class="addbar card" id="add-form" autocomplete="off">
-        <span class="ic" aria-hidden="true">${I.plus}</span>
-        <input type="text" id="add-input" placeholder="Was fehlt?" aria-label="Artikel hinzufügen" autocapitalize="sentences" enterkeyhint="done" role="combobox" aria-expanded="false" aria-controls="suggest" />
-        <input type="number" id="add-qty" class="qtybox" value="1" min="0.001" step="any" inputmode="decimal" aria-label="Menge" />
-        <button class="btn btn-primary" type="submit" aria-label="Hinzufügen">${I.plus}</button>
+        <div class="addline">
+          <span class="ic" aria-hidden="true">${I.plus}</span>
+          <input type="text" id="add-input" placeholder="Was fehlt?" aria-label="Artikel hinzufügen" autocapitalize="sentences" enterkeyhint="done" role="combobox" aria-expanded="false" aria-controls="suggest" />
+        </div>
+        <div class="addqty" id="add-qtyrow" hidden>
+          <span class="qty" role="group" aria-label="Menge">
+            <button type="button" class="qbtn" id="add-minus" aria-label="weniger">−</button>
+            <input type="number" id="add-qty" class="qtyin" value="1" min="0" step="any" inputmode="decimal" enterkeyhint="done" aria-label="Menge" />
+            <button type="button" class="qbtn" id="add-plus" aria-label="mehr">+</button>
+          </span>
+          <span class="addunit" id="add-unit"></span>
+          <button class="btn btn-primary btn-sm" type="submit">Hinzufügen</button>
+        </div>
       </form>
       <ul class="suggest" id="suggest" role="listbox" hidden></ul>
     </div>
@@ -614,9 +700,16 @@ function renderShopping() {
   const input = $("#add-input");
   if (typed) input.value = typed;
   if (typedQty && typedQty !== "1") $("#add-qty").value = typedQty;
-  input.addEventListener("input", () => { state.addSelected = null; renderSuggestions(input.value); });
+  input.addEventListener("input", () => { state.addSelected = null; renderSuggestions(input.value); syncAddQty(); });
   input.addEventListener("keydown", onSuggestKey);
   input.addEventListener("blur", () => setTimeout(() => hideSuggestions(), 150));
+  // Tippen auf Plus/Minus/Hinzufügen lässt die Tastatur offen, sonst springt die Zeile unter dem Finger weg.
+  $("#add-qtyrow").addEventListener("mousedown", (e) => { if (!e.target.matches("input")) e.preventDefault(); });
+  const bumpAdd = (dir) => { const q = $("#add-qty"), n = qtyNext(num(q.value) > 0 ? num(q.value) : 1, dir, qtyStepOf(addUnitOf(addTargetProduct()))); if (n != null) { q.value = String(n); syncAddQty(); } };
+  $("#add-minus").addEventListener("click", () => bumpAdd(-1));
+  $("#add-plus").addEventListener("click", () => bumpAdd(1));
+  $("#add-qty").addEventListener("input", syncAddQty);
+  syncAddQty();
   renderCta();
   restoreFocus(focusKey);
 }
@@ -666,7 +759,25 @@ function pickSuggestion(li) {
   if (li.dataset.pid) { const p = state.products.get(num(li.dataset.pid)); state.addSelected = p || null; input.value = p ? p.name : input.value; }
   else state.addSelected = { note: true };
   hideSuggestions();
-  $("#add-form").requestSubmit ? $("#add-form").requestSubmit() : onAddSubmit(new Event("submit"));
+  syncAddQty();                 // erst Menge wählen, „Hinzufügen“ legt an
+}
+// Produkt der Eingabezeile: explizit gewählt, sonst eindeutiger exakter Namenstreffer; sonst Notiz (null).
+function addTargetProduct() {
+  if (state.addSelected) return state.addSelected.note ? null : state.addSelected;
+  const input = $("#add-input"), k = normKey(input ? input.value : "");
+  const m = state.productNames.filter((p) => p.key === k);
+  return m.length === 1 ? state.products.get(m[0].id) || null : null;
+}
+// Einheit, in der die Eingabe gilt: Einkaufs-Einheit, falls umrechenbar, sonst Lager-Einheit.
+const addUnitOf = (prod) => (!prod ? null : (prod.quPurchase != null && prod.quStock != null && factor(prod.id, prod.quPurchase, prod.quStock) != null ? prod.quPurchase : prod.quStock));
+function syncAddQty() {
+  const input = $("#add-input"), row = $("#add-qtyrow"), q = $("#add-qty"); if (!input || !row || !q) return;
+  const has = !!input.value.trim();
+  row.hidden = !has;
+  if (!has) q.value = "1";
+  const quId = addUnitOf(addTargetProduct()), v = num(q.value) > 0 ? num(q.value) : 1;
+  $("#add-unit").textContent = quId != null && state.units.has(num(quId)) ? unitLabel(quId, v) : "";
+  $("#add-minus").disabled = qtyNext(v, -1, qtyStepOf(quId)) == null;
 }
 function onSuggestKey(e) {
   const ul = $("#suggest"); if (!ul || ul.hidden) return;
@@ -693,19 +804,13 @@ async function onAddSubmit(e) {
   let qty = num(qtyEl.value); if (qty <= 0) qty = 1;
   hideSuggestions();
 
-  // Produkt: explizit gewählt, sonst eindeutiger exakter Namenstreffer; sonst Notiz.
-  let prod = state.addSelected && !state.addSelected.note ? state.addSelected : null;
-  if (!prod && !(state.addSelected && state.addSelected.note)) {
-    const k = normKey(name);
-    const m = state.productNames.filter((p) => p.key === k);
-    if (m.length === 1) prod = state.products.get(m[0].id) || null;
-  }
+  const prod = addTargetProduct();
   let body, label;
   if (prod) {
     // Eingabe gilt in der Einkaufs-Einheit; gespeichert wird in der Lager-Einheit.
     const f = prod.quPurchase != null && prod.quStock != null ? factor(prod.id, prod.quPurchase, prod.quStock) : null;
     const amount = f != null ? round3(qty * f) : qty;
-    const quId = f != null ? prod.quPurchase : prod.quStock;
+    const quId = addUnitOf(prod);
     body = { shopping_list_id: CFG.listId, product_id: prod.id, amount, ...(quId != null ? { qu_id: quId } : {}) };
     label = `„${prod.name}“ (${amountLabel(qty, quId)}) ergänzt`;
   } else {
@@ -717,7 +822,7 @@ async function onAddSubmit(e) {
   try { created = await api("/api/objects/shopping_list", { method: "POST", body }); }
   catch (err) { toast(describeError(err), { bad: true }); return; }          // Eingabe bleibt stehen
   finally { adding = false; submit.disabled = false; input.disabled = false; }
-  input.value = ""; qtyEl.value = "1"; state.addSelected = null; input.focus();
+  input.value = ""; qtyEl.value = "1"; state.addSelected = null; syncAddQty(); input.focus();
   // Notiz angelegt → tipploser Einstieg in den Produkt-Wizard über die Toast-Aktion.
   const newId = created && created.created_object_id != null ? num(created.created_object_id) : null;
   // Die Zeile kann noch vor dem Nachladen angetippt werden → erst sicherstellen, dass sie im Stand ist.
@@ -829,6 +934,7 @@ async function putAwayOne(it, useStock, override = {}) {
 async function runPutaway(items, { overrides = {} } = {}) {
   if (state.running || !items.length) return;
   if (navigator.onLine === false) { toast("Gerade kein Netz. Einsortieren geht, sobald du wieder online bist."); return; }
+  if (!(await flushQty()) || state.running) return;          // gerade geänderte Mengen müssen mitgebucht werden
   state.running = true; renderCta(); renderShopping();
   const useStock = CFG.bookStock;
   // Frischer Stand: Zeilen, die andere inzwischen entfernt/zurückgelegt haben, überspringen.
@@ -992,24 +1098,11 @@ function openAdjustSheet(id) {
   const pl = plan(it);
   const jm = journalMeta(it);
   const canBook = CFG.bookStock && it.kind === "product" && !jm;
-  const dispUnit = it.dispQu != null ? unitLabel(it.dispQu, 2) : "";
-  const stockUnit = p && p.quStock != null ? unitLabel(p.quStock, 2) : "";
-  const toStock = (v) => { const f = p && it.dispQu != null ? factor(p.id, it.dispQu, p.quStock) : null; return f != null ? round3(v * f) : round3(v); };
   const locOpts = Array.from(state.locations.entries()).map(([lid, l]) => `<option value="${lid}" ${p && p.locationId === lid ? "selected" : ""}>${esc(l.name)}</option>`).join("");
   const bbdDefault = pl.bbdMode === "default" ? addDays(p.bbdDays) : "";
   const html = `
     <h2 id="sheet-title">${esc(it.name)}</h2>
-    <p class="sub">${kindChip(it) || "Im Wagen"}</p>
-    ${it.kind !== "note" ? `
-    <div class="field" style="padding:8px 0">
-      <span class="lbl">Gekaufte Menge${dispUnit ? " in " + esc(dispUnit) : ""}</span>
-      <div class="stepper">
-        <button type="button" id="adj-minus" aria-label="weniger">−</button>
-        <input type="number" id="adj-qty" value="${esc(String(it.dispValue))}" min="0.001" step="any" inputmode="decimal" aria-label="Menge" />
-        <button type="button" id="adj-plus" aria-label="mehr">+</button>
-      </div>
-      <div class="hint" id="adj-stockline" style="text-align:center">${it.stockHint ? `= ${esc(amountLabel(toStock(it.dispValue), p.quStock))} kommen in den Vorrat` : ""}</div>
-    </div>` : ""}
+    <p class="sub">${kindChip(it) || esc(amountLabel(it.dispValue, it.dispQu))}</p>
     ${canBook ? `
     <details class="help" style="margin:0 0 8px">
       <summary>Mehr: Haltbarkeit · Lagerort</summary>
@@ -1034,29 +1127,11 @@ function openAdjustSheet(id) {
     </div>`;
   openSheet(html);
   let never = false;
-  const qty = $("#adj-qty"), line = $("#adj-stockline");
-  const cur = () => { const v = num(qty && qty.value); return v > 0 ? v : 1; };
-  const upd = () => { if (line && it.stockHint) line.textContent = `= ${amountLabel(toStock(cur()), p.quStock)} kommen in den Vorrat`; };
-  if (qty) {
-    $("#adj-minus").addEventListener("click", () => { qty.value = String(Math.max(0.001, round3(cur() - 1))); upd(); });
-    $("#adj-plus").addEventListener("click", () => { qty.value = String(round3(cur() + 1)); upd(); });
-    qty.addEventListener("input", upd);
-  }
   const nv = $("#adj-never"); if (nv) nv.addEventListener("click", () => { never = true; $("#adj-bbd").value = ""; $("#adj-bbdhint").textContent = "Wird als „läuft nie ab“ gebucht."; });
   const bb = $("#adj-bbd"); if (bb) bb.addEventListener("input", () => { never = false; });
-  const saveAmount = async () => {
-    if (!qty || it.kind === "note") return true;
-    const newStock = toStock(cur());
-    if (Math.abs(newStock - it.amount) < 1e-9) return true;
-    await api(`/api/objects/shopping_list/${it.id}`, { method: "PUT", body: { amount: newStock } });
-    it.amount = newStock; it.dispValue = cur();
-    if (it.stockHint) it.stockHint = amountLabel(newStock, p.quStock);
-    return true;
-  };
   const bookBtn = $("#adj-book");
   if (bookBtn) bookBtn.addEventListener("click", async () => {
     bookBtn.disabled = true;
-    try { await saveAmount(); } catch (e) { toast(describeError(e), { bad: true }); bookBtn.disabled = false; return; }
     const override = {};
     if (never) override.bbd = "never"; else if (bb && bb.value && bb.value !== bbdDefault) override.bbd = bb.value;
     const loc = $("#adj-loc"); if (loc && num(loc.value) !== (p.locationId || 0)) override.locationId = num(loc.value);
@@ -1741,6 +1816,7 @@ async function openWizard(rowId, opts = {}) {
   const row = state.shopping.find((s) => s.id === num(rowId));
   if (!row || row.kind !== "note") { toast("Diese Zeile ist keine Notiz mehr."); return; }
   if (JOURNAL.get(row.id)) { toast("Diese Zeile hängt noch in einer Buchung."); return; }
+  await flushQty();
   if (!state.locations.size || !state.units.size) { try { await loadMasters(true); } catch (_) {} }
   openSheet(`<h2 id="sheet-title">${esc(row.name)}</h2><p class="sub"><span class="spin"></span> Vorbelegung wird vorbereitet …</p>`);
   const pf = await wizardPrefill(row.name, row.amount > 1 ? row.amount : null, null);
@@ -2433,6 +2509,7 @@ async function go(tab) {
 }
 async function refresh({ quiet = false } = {}) {
   if (state.running || !CFG.configured || state.tab === "settings" || state.tab === "onboarding") return;
+  await flushQty();
   if (state.busy.size) return;
   const btn = $("#btn-refresh"); if (btn) btn.classList.add("spin");
   const tab = state.tab;
@@ -2465,6 +2542,8 @@ function onViewClick(e) {
   if (t.getAttribute("aria-disabled") === "true" || t.disabled) return;
   const act = t.dataset.act, id = num(t.dataset.id);
   if (act === "toggle") toggleShopping(id);
+  else if (act === "qty-inc") bumpQty(id, 1);
+  else if (act === "qty-dec") bumpQty(id, -1);
   else if (act === "adjust") openAdjustSheet(id);
   else if (act === "wizard") openWizard(id);
   else if (act === "remove-only") removeOnly(id);
@@ -2480,6 +2559,10 @@ function wire() {
   $("#btn-settings").addEventListener("click", safe(() => go("settings")));
   $("#btn-refresh").addEventListener("click", safe(() => refresh()));
   view.addEventListener("click", safe(onViewClick));
+  view.addEventListener("change", safe(onQtyChange));
+  view.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches(".qtyin[data-id]")) { e.preventDefault(); e.target.blur(); } });
+  // Mengenfeld antippen: Wert markiert (einfach drübertippen), Zeile bleibt über der Tastatur sichtbar.
+  view.addEventListener("focusin", (e) => { if (!e.target.matches(".qtyin")) return; try { e.target.select(); } catch (_) {} if (e.target.dataset.id) setTimeout(() => { try { e.target.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {} }, 150); });
   $("#ctawrap").addEventListener("click", safe(onViewClick));
   $("#toast-act").addEventListener("click", safe(() => { const a = toastAction; hideToast(); if (a) a.fn(); }));
   $("#backdrop").addEventListener("click", closeSheet);
@@ -2487,7 +2570,7 @@ function wire() {
   // Android-Tastatur: fokussiertes Feld im Sheet sichtbar halten.
   $("#sheet").addEventListener("focusin", (e) => { if (e.target.matches("input, select, textarea")) setTimeout(() => { try { e.target.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {} }, 150); });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") stopScan();
+    if (document.visibilityState === "hidden") { stopScan(); flushQty(); }
     if (document.visibilityState === "visible" && !sheetOpen) refresh({ quiet: true });
   });
   window.addEventListener("offline", reflectOnline);

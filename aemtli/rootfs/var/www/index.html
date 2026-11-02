@@ -162,13 +162,26 @@
 
     /* ---- Add-Bar + Vorschläge ---- */
     .addwrap{position:relative; margin-bottom:6px;}
-    .addbar{display:flex; align-items:center; gap:8px; padding:6px 8px 6px 14px; min-height:56px;}
+    .addbar{padding:6px 8px 6px 14px; min-height:56px;}
+    .addline{display:flex; align-items:center; gap:8px; min-height:44px;}
+    .addqty{display:flex; align-items:center; gap:8px; margin-top:4px; padding-top:6px; border-top:1px solid var(--line);}
+    .addunit{flex:1; min-width:0; font-size:.875rem; color:var(--ink-2);}
     .addbar .ic{color:var(--ink-2); display:grid; place-items:center;}
     .addbar input[type=text]{flex:1; min-width:0; border:none; outline:none; background:transparent; font-size:1rem; padding:10px 0;}
     .addbar input::placeholder{color:var(--ink-2); opacity:1;}
-    .qtybox{width:64px; min-height:44px; flex:0 0 auto; border:1px solid var(--line); border-radius:10px; padding:6px; font-size:1rem; text-align:center; background:var(--surface); outline:none;}
-    .qtybox:focus{border-color:var(--brand);}
-    .addbar .btn{min-width:44px; padding:10px;}
+    /* Mengen-Stepper: Eingabezeile und jede Listenzeile. touch-action: schnelles Tippen zoomt sonst. */
+    .qty{display:inline-flex; align-items:center; flex:0 0 auto; border:1px solid var(--line-strong); border-radius:12px; background:var(--surface); overflow:hidden;}
+    .qbtn{width:38px; height:44px; padding:0; border:none; background:transparent; color:var(--ink); font-size:1.25rem; font-weight:700; display:grid; place-items:center; touch-action:manipulation;}
+    .qbtn:active:not(:disabled){background:var(--surface-2);}
+    .qbtn:disabled{color:var(--line-strong); cursor:default;}
+    .qtyin{width:38px; height:44px; padding:0; border:none; border-radius:0; outline:none; background:transparent; color:var(--ink); text-align:center; font-size:1rem; font-weight:700; font-variant-numeric:tabular-nums; appearance:textfield; -moz-appearance:textfield;}
+    .qtyin::-webkit-outer-spin-button,.qtyin::-webkit-inner-spin-button{-webkit-appearance:none; margin:0;}
+    .qtyin:focus{background:var(--brand-soft);}
+    /* Notiz-Knopf unter dem Namen: sichtbar 32 px, Trefferfläche 44 px */
+    .notebtn{position:relative; display:inline-flex; align-items:center; gap:4px; min-height:32px; margin-top:2px; padding:2px 10px 2px 6px; border-radius:999px; border:1px solid color-mix(in srgb, var(--warn) 45%, transparent); background:var(--warn-soft); color:var(--warn); font-size:.8125rem; font-weight:600;}
+    .notebtn::after{content:""; position:absolute; inset:-6px -4px;}
+    .notebtn svg{width:16px; height:16px;}
+    .notebtn:disabled{opacity:.6;}
     .suggest{list-style:none; margin:6px 0 0; padding:4px; background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);}
     .suggest li{display:flex; align-items:center; gap:10px; min-height:44px; padding:8px 12px; border-radius:10px; cursor:pointer;}
     .suggest li:hover,.suggest li[aria-selected="true"]{background:var(--surface-2);}
@@ -183,7 +196,7 @@
     .check{width:24px; height:24px; border-radius:999px; border:2px solid var(--line-strong); display:grid; place-items:center; color:var(--on-brand); transition:all .15s;}
     .check.on{background:var(--brand-strong); border-color:var(--brand-strong);}
     .row .body{flex:1; min-width:0;}
-    .row .nm{font-weight:600; font-size:1rem; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+    .row .nm{font-weight:600; font-size:1rem; display:flex; align-items:center; gap:8px; flex-wrap:wrap; overflow-wrap:anywhere; hyphens:auto;}
     .row.done .nm{color:var(--ink-2); font-weight:500;}
     .row .meta{font-size:.875rem; color:var(--ink-2); margin-top:1px; font-variant-numeric:tabular-nums; display:flex; flex-wrap:wrap; gap:4px 10px; align-items:center;}
     .row .meta.warn{color:var(--warn);}
@@ -224,7 +237,6 @@
 
     /* ---- Ämtli 2.1: Wizard, Vorschläge, Vorrat ---- */
     .row .body.tap{cursor:pointer;}
-    .iconbtn.warnbtn{color:var(--warn); border-color:color-mix(in srgb, var(--warn) 45%, transparent); background:var(--warn-soft);}
     .sect .count.warn{color:var(--warn); background:var(--warn-soft); border-color:transparent;}
     .chiprow{display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;}
     .chip.pick{min-height:36px; padding:6px 12px; font-size:.875rem; font-weight:600; cursor:pointer; background:var(--surface-2); border:1px solid var(--line-strong); color:var(--ink); border-radius:999px; white-space:nowrap;}
