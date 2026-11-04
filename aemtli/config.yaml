@@ -2,7 +2,7 @@
 # Liefert die statische PWA aus und proxyt server-seitig das HA-Grocy-Add-on
 # über das interne hassio-Netz (kein Direktport zum Host, kein Tailscale-Umweg).
 name: "Ämtli"
-version: "2.2.0"
+version: "2.3.0"
 slug: "aemtli"
 description: "Schlanke, installierbare PWA für Grocy – Einkaufszettel & Hausarbeiten"
 # KEIN 'image:' -> Supervisor baut das Dockerfile lokal.
@@ -34,9 +34,15 @@ options:
   certfile: "fullchain.pem"
   keyfile: "privkey.pem"
   log_level: "info"
+  # Push „Neues auf der Liste“: Grocy-API-Schlüssel für den Dienst im Add-on
+  # (leer = aus) und Sammelfenster in Minuten.
+  grocy_api_key: ""
+  push_batch_minutes: 10
 schema:
   grocy_upstream: "str"
   ssl: "bool"
   certfile: "str"
   keyfile: "str"
   log_level: "list(trace|debug|info|notice|warning|error|fatal)"
+  grocy_api_key: "password?"
+  push_batch_minutes: "int(1,120)?"

@@ -1,8 +1,9 @@
 /* Service Worker – App-Shell offline verfügbar, online IMMER frisch.
    Strategie: network-first für eigene Assets (Cache nur als Offline-Fallback),
    damit geänderte index.html/app.js sofort ankommen. Fehlerantworten werden nie
-   gecacht. Der Grocy-Proxy (/grocy/) und fremde Origins werden nicht angefasst. */
-const CACHE = "aemtli-v6";
+   gecacht. Der Grocy-Proxy (/grocy/) und fremde Origins werden nicht angefasst.
+   Seit 2.3 zeigt er außerdem Web-Push-Nachrichten „Neues auf der Liste“ an. */
+const CACHE = "aemtli-v7";
 const SHELL = [
   "./",
   "./index.html",
@@ -38,8 +39,8 @@ self.addEventListener("fetch", (e) => {
 
   const url = new URL(req.url);
 
-  // Grocy-API-Proxy (/grocy/) und Open-Food-Facts-Proxy (/off/) niemals cachen – dynamisch + mit Auth.
-  if (url.pathname.includes("/grocy/") || url.pathname.includes("/off/")) return;
+  // Grocy-API-Proxy (/grocy/), Open-Food-Facts-Proxy (/off/) und Push-Dienst (/push/) niemals cachen – dynamisch + mit Auth.
+  if (url.pathname.includes("/grocy/") || url.pathname.includes("/off/") || url.pathname.includes("/push/")) return;
 
   // Fremde Origin: nicht anfassen, direkt ans Netz.
   if (url.origin !== self.location.origin) return;
@@ -76,4 +77,42 @@ self.addEventListener("fetch", (e) => {
       })
       .catch(() => caches.match(req).then((c) => c || Response.error()))
   );
+});
+
+/* ---- Web Push (Ämtli 2.3) ---- */
+// Der Dienst im Add-on schickt JSON {title, body, tag, url}; Text als Fallback.
+self.addEventListener("push", (e) => {
+  let d = {};
+  if (e.data) {
+    try { d = e.data.json() || {}; }
+    catch (_) { try { d = { body: e.data.text() }; } catch (__) { d = {}; } }
+  }
+  e.waitUntil(
+    self.registration.showNotification(d.title || "Ämtli", {
+      body: d.body || "",
+      tag: d.tag || "aemtli",
+      renotify: true,                       // gleicher Tag ersetzt die alte Nachricht – trotzdem hörbar
+      icon: "./icons/icon-192.png",
+      badge: "./icons/icon-192.png",
+      data: { url: d.url || "./" },
+    })
+  );
+});
+
+// Antippen: ein offenes Ämtli-Fenster nach vorn holen, sonst die App öffnen.
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const scope = self.registration.scope;
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      const win = list.find((c) => c.url && c.url.startsWith(scope));
+      if (win && "focus" in win) return win.focus();
+      return self.clients.openWindow ? self.clients.openWindow(scope) : undefined;
+    })
+  );
+});
+
+// Der Browser hat das Abo erneuert oder verworfen: Die App meldet es beim nächsten Start selbst neu.
+self.addEventListener("pushsubscriptionchange", () => {
+  console.log("[aemtli] pushsubscriptionchange – die App synchronisiert beim nächsten Start");
 });

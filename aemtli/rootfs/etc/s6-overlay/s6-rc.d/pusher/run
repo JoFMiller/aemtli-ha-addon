@@ -1,0 +1,37 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Ämtli – startet den Push-Dienst „Neues auf der Liste“ (von s6 überwacht)
+# Liest die Add-on-Optionen und reicht sie als Umgebungsvariablen an pusher.py.
+# Ohne grocy_api_key läuft der Dienst trotzdem: /push/status meldet dann den Grund.
+# ==============================================================================
+
+declare grocy_upstream api_key batch_minutes
+
+grocy_upstream="$(bashio::config 'grocy_upstream')"
+api_key=""
+if bashio::config.has_value 'grocy_api_key'; then
+    api_key="$(bashio::config 'grocy_api_key')"
+fi
+[[ "${api_key}" == "null" ]] && api_key=""
+
+batch_minutes=10
+if bashio::config.has_value 'push_batch_minutes'; then
+    batch_minutes="$(bashio::config 'push_batch_minutes')"
+fi
+[[ "${batch_minutes}" =~ ^[1-9][0-9]*$ ]] || batch_minutes=10
+
+export AEMTLI_GROCY_UPSTREAM="${grocy_upstream%/}"
+export AEMTLI_GROCY_API_KEY="${api_key}"
+export AEMTLI_PUSH_BATCH_SECONDS="$(( batch_minutes * 60 ))"
+export AEMTLI_LOG_LEVEL="$(bashio::config 'log_level')"
+export AEMTLI_DATA="/data/push"
+
+mkdir -p "${AEMTLI_DATA}"
+
+if [[ -z "${api_key}" ]]; then
+    bashio::log.info "Push-Dienst startet ohne grocy_api_key – Benachrichtigungen bleiben aus."
+else
+    bashio::log.info "Push-Dienst startet (Sammelfenster ${batch_minutes} min)…"
+fi
+exec python3 /opt/aemtli/pusher.py

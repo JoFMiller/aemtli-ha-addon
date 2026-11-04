@@ -110,6 +110,8 @@ Bindestriche, z. B. `a0d7b954_grocy` → `a0d7b954-grocy`).
 | `certfile` | `fullchain.pem` | Zertifikat in `/ssl` (nur bei `ssl: true`). |
 | `keyfile` | `privkey.pem` | Privater Schlüssel in `/ssl`. |
 | `log_level` | `info` | Log-Ausführlichkeit. |
+| `grocy_api_key` | leer | Grocy-API-Schlüssel für den Push-Dienst (siehe „Benachrichtigungen“). Leer = keine Benachrichtigungen. |
+| `push_batch_minutes` | `10` | Sammelfenster der Benachrichtigungen in Minuten (1–120). |
 
 ---
 
@@ -200,6 +202,55 @@ Der API-Key bleibt nur auf dem jeweiligen Gerät (localStorage) und wird vom Pro
 unverändert an Grocy durchgereicht – **nicht** im Add-on gespeichert. iPhone: nach
 „Zum Home-Bildschirm“ den Schlüssel in der installierten App noch einmal eintragen
 (iOS trennt die Speicher von Safari und App).
+
+---
+
+## Benachrichtigungen (ab 2.3)
+
+Setzt jemand etwas auf die Einkaufsliste, bekommen die anderen eine Nachricht aufs
+Handy, z. B. „Johannes: Milch, Eier und 2 weitere“. Ämtli sammelt die Einträge
+(Standard 10 Minuten) und schickt pro Sammelfenster höchstens eine Nachricht. Wer
+über Ämtli einträgt, bekommt dafür keine – Ämtli vergleicht den Grocy-Benutzer,
+nicht das Gerät. Was V direkt in Grocy einträgt, kann Ämtli niemandem zuordnen: Das
+meldet es allen als „Neu: …“. Aufgaben und Vorrat lösen nichts aus.
+
+### Einrichtung
+
+1. **Schlüssel in Grocy anlegen.** Am besten für einen eigenen Benutzer „Ämtli“:
+   V legt ihn in Grocy unter *Benutzer* an und entzieht ihm unter *Berechtigungen*
+   alle Rechte außer Lesen. Der Dienst liest nur Einkaufsliste und Produkte. Als
+   „Ämtli“ anmelden → Benutzermenü → „Manage API keys“ → Add.
+2. **Ämtli-Add-on → Konfiguration:** den Schlüssel in `grocy_api_key` eintragen,
+   speichern, Add-on neu starten. Das Log meldet dann `[pusher] Push an: …`.
+   `push_batch_minutes` ändert das Sammelfenster.
+3. **In der App, auf jedem Handy einzeln:** Einstellungen → Benachrichtigungen →
+   „Neues auf der Liste“ einschalten und dem Browser die Benachrichtigungen
+   erlauben. „Testnachricht“ prüft den ganzen Weg bis aufs Handy.
+
+### Gut zu wissen
+
+- Einschalten geht nur über die Tailscale- oder Direkt-Adresse (Weg B/C), **nicht
+  über HA-Ingress** – dort läuft kein Service Worker.
+- Android-Chrome stellt die Nachrichten über Google zu (Firebase Cloud Messaging).
+  Der Inhalt ist verschlüsselt; Google sieht nur, dass eine Nachricht kommt.
+- iPhone: nur als **installierte PWA** („Zum Home-Bildschirm“), ab **iOS 16.4**.
+  Den Schalter in der installierten App setzen, nicht in Safari.
+- Zum **Empfangen** muss das Handy nicht im Tailnet sein. Einschalten und
+  Testnachricht brauchen die Ämtli-Adresse, also Tailscale.
+- Die persönlichen Schlüssel bleiben auf den Geräten. In `/data/push/` liegen nur
+  die Geräte-Anmeldungen und das Schlüsselpaar für den Versand.
+
+### Fehlersuche
+
+- **„Push ist im Add-on nicht eingerichtet“:** Die Option `grocy_api_key` fehlt →
+  Einrichtung Schritt 1 und 2.
+- **Testnachricht kommt nicht an:** Browser-Berechtigung prüfen (Seiten-Einstellungen
+  → Benachrichtigungen → Zulassen; auf Android zusätzlich die
+  App-Benachrichtigungen von Chrome bzw. der installierten App). Danach den Schalter
+  aus- und wieder einschalten.
+- **Status ansehen:** `https://aemtli.<tailnet>.ts.net/push/status` im Browser
+  öffnen. `enabled: false` nennt unter `reason` den Grund. Jeden Versand protokolliert
+  das Add-on-Log mit `[pusher]`.
 
 ---
 

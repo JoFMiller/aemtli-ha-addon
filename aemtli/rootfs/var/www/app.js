@@ -71,7 +71,7 @@ const DIAG = {
       `Ämtli ${APP_VERSION} · Modus: ${ADDON ? (UNDER_INGRESS ? "Add-on/Ingress" : "Add-on/Direkt") : "Standalone"}`,
       `Basis: ${CFG.url || "-"} · Liste ${CFG.listId} · online: ${navigator.onLine}`,
       `Grocy: ${state.grocyVersion || "?"} · Nutzer: ${state.user ? (state.user.display_name || state.user.username) : "?"}`,
-      `SW: ${state.swState} · UA: ${navigator.userAgent}`,
+      `SW: ${state.swState} · Push: ${CFG.push ? "an" : "aus"} (${typeof Notification !== "undefined" ? Notification.permission : "-"}) · UA: ${navigator.userAgent}`,
       "Letzte Fehler:",
       ...this.items.map((i) => `  ${i.t} ${i.kind}${i.status ? " " + i.status : ""} ${i.path || ""} ${i.msg || ""}`),
     ];
@@ -107,6 +107,9 @@ const CFG = {
   set expireAuto(v) { store.set("aemtli.expire.auto", v ? "1" : "0"); },
   get expireSpoiled() { return store.get("aemtli.expire.spoiled") === "1"; }, // als „verdorben“ statt „verbraucht“ buchen
   set expireSpoiled(v) { store.set("aemtli.expire.spoiled", v ? "1" : "0"); },
+  // Ämtli 2.3
+  get push() { return store.get("aemtli.push") === "1"; },                    // Benachrichtigungen „Neues auf der Liste“ (Standard: aus)
+  set push(v) { store.set("aemtli.push", v ? "1" : "0"); },
   get configured() { return !!this.key && !!this.url; },
 };
 
@@ -825,6 +828,7 @@ async function onAddSubmit(e) {
   input.value = ""; qtyEl.value = "1"; state.addSelected = null; syncAddQty(); input.focus();
   // Notiz angelegt → tipploser Einstieg in den Produkt-Wizard über die Toast-Aktion.
   const newId = created && created.created_object_id != null ? num(created.created_object_id) : null;
+  pushClaim(newId);
   // Die Zeile kann noch vor dem Nachladen angetippt werden → erst sicherstellen, dass sie im Stand ist.
   if (!prod && newId) toast(label, { action: { label: "Als Produkt anlegen", fn: async () => { if (!state.shopping.some((s) => s.id === newId)) { try { await loadShopping(); } catch (_) {} renderShopping(); } openWizard(newId); } } });
   else toast(label);
@@ -1069,6 +1073,7 @@ async function undoLast() {
   hideToast();
   state.running = true; renderCta();
   let okN = 0, failN = 0, txFail = 0;
+  const claimIds = [];                                   // neu angelegte Zeilen → Push-Dienst (siehe pushClaim)
   try {
     for (const r of last.rows) {
       let bookingUndone = !r.tx;
@@ -1078,11 +1083,12 @@ async function undoLast() {
       }
       try {
         const body = { shopping_list_id: last.listId, amount: r.amount, done: 1, ...(r.productId != null ? { product_id: r.productId } : { note: r.note || r.name }), ...(r.quId != null ? { qu_id: r.quId } : {}) };
-        await api("/api/objects/shopping_list", { method: "POST", body });
+        claimIds.push(createdId(await api("/api/objects/shopping_list", { method: "POST", body })));
         if (bookingUndone) okN++; else failN++;
       } catch (e) { failN++; }
     }
   } finally { state.running = false; }
+  pushClaim(claimIds);
   LAST.set(null);
   try { await loadShopping(); } catch (_) {}
   renderShopping(); updateBadges();
@@ -1343,6 +1349,7 @@ async function probe(key, base) {
 }
 function applyProbe(res) {
   state.user = res.user; state.grocyVersion = res.version;
+  if (res.user) store.set("aemtli.user", res.user.display_name || res.user.username || ""); else store.del("aemtli.user");   // für pushClaim, falls der Nutzer noch nicht geladen ist
   if (res.lists.length && !res.lists.some((l) => num(l.id) === CFG.listId)) { CFG.listId = num(res.lists[0].id); CFG.listName = res.lists[0].name || ""; }
   const cur = res.lists.find((l) => num(l.id) === CFG.listId); if (cur) CFG.listName = cur.name || "";
 }
@@ -1463,6 +1470,8 @@ function renderSettings() {
       </div>
     </section>
 
+    ${pushCardHTML()}
+
     <h2 class="sect">Vorrat</h2>
     <section class="card">
       <div class="field">
@@ -1509,6 +1518,7 @@ function renderSettings() {
   $("#set-book").addEventListener("change", (e) => { CFG.bookStock = e.target.checked; toast(e.target.checked ? "Vorrat wird mitgeführt" : "Vorrat wird nicht mehr gebucht"); });
   $("#set-suggest").addEventListener("change", (e) => { CFG.suggest = e.target.checked; if (e.target.checked) computeSuggestions(true); });
   $("#set-notehint").addEventListener("change", (e) => { CFG.noteHint = e.target.checked; });
+  wirePushCard(); pushCardFill();
   $("#set-expire").addEventListener("change", (e) => { CFG.expireAuto = e.target.checked; if (e.target.checked) { store.del("aemtli.expire.lastRun"); toast("Läuft beim nächsten Öffnen der Einkaufsliste."); } });
   $("#set-spoiled").addEventListener("change", (e) => { CFG.expireSpoiled = e.target.checked; });
   const eu = $("#set-expire-undo"); if (eu) eu.addEventListener("click", undoCleanup);
@@ -1520,7 +1530,8 @@ function renderSettings() {
   $("#diag-clear").addEventListener("click", () => { DIAG.items = []; store.del("aemtli.diag"); $("#diag-text").textContent = DIAG.text(); });
   $("#set-logout").addEventListener("click", () => {
     if (!confirm("Schlüssel von diesem Gerät entfernen? Die Liste bleibt in Grocy erhalten.")) return;
-    store.del("grocy.key"); state.user = null; setBanner("auth", null);
+    if (CFG.push) pushDisable({ quiet: true });                      // liest den Schlüssel sofort, bevor er gelöscht wird
+    store.del("grocy.key"); store.del("aemtli.user"); state.user = null; setBanner("auth", null);
     toast("Schlüssel entfernt"); renderOnboarding();
   });
 }
@@ -1965,7 +1976,7 @@ async function linkRows(pid, qtyPurchase, quPurchase, quStock, f) {
       await api(`/api/objects/shopping_list/${id}`, { method: "PUT", body: { product_id: pid, note: "", amount: amountStock, ...(quPurchase != null ? { qu_id: quPurchase } : {}) } });
       linked++;
     } catch (e) {
-      if (isGone(e)) { try { await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, product_id: pid, amount: amountStock, done: wz.rowDone ? 1 : 0, ...(quPurchase != null ? { qu_id: quPurchase } : {}) } }); gone++; } catch (_) {} }
+      if (isGone(e)) { try { const again = await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, product_id: pid, amount: amountStock, done: wz.rowDone ? 1 : 0, ...(quPurchase != null ? { qu_id: quPurchase } : {}) } }); pushClaim(createdId(again)); gone++; } catch (_) {} }
       else throw e;
     }
   }
@@ -2043,7 +2054,8 @@ async function undoWizard(u) {
       const cur = await api(`/api/objects/shopping_list/${r.id}`).catch(() => null);
       if (cur && num(cur.product_id) === u.pid) {
         await api(`/api/objects/shopping_list/${r.id}`, { method: "DELETE" });
-        await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, note: r.note, amount: r.amount, done: r.done ? 1 : 0 } });
+        const again = await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, note: r.note, amount: r.amount, done: r.done ? 1 : 0 } });
+        pushClaim(createdId(again));
         note++;
       }
     } catch (_) { fail++; }
@@ -2208,7 +2220,8 @@ async function suggestionAdd(pid) {
   const f = factor(p.id, qu, p.quStock) || 1;
   if (btn) btn.disabled = true;
   try {
-    await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, product_id: p.id, amount: round3(qty * f), ...(qu != null ? { qu_id: qu } : {}) } });
+    const added = await api("/api/objects/shopping_list", { method: "POST", body: { shopping_list_id: CFG.listId, product_id: p.id, amount: round3(qty * f), ...(qu != null ? { qu_id: qu } : {}) } });
+    pushClaim(createdId(added));
     toast(`„${p.name}“ ergänzt`);
     await loadShopping(); renderShopping(); updateBadges();
   } catch (e) { if (btn) btn.disabled = false; toast(describeError(e), { bad: true }); }
@@ -2368,6 +2381,243 @@ function afterShoppingLoaded() {
   NOTE_SKIP.prune(new Set(state.shopping.map((s) => s.id)));
   computeSuggestions().then(() => { if (state.tab === "shopping" && !sheetOpen) renderShopping(); });
   setTimeout(() => { if (!sheetOpen) maybeCleanup(); }, 3000);
+  pushRefresh();
+}
+
+/* ====================================================================== */
+/*  ÄMTLI 2.3 – Benachrichtigungen „Neues auf der Liste“                   */
+/*  Server: pusher.py im Add-on (nginx reicht /push/ durch). Jede Zeile,   */
+/*  die diese App anlegt, meldet pushClaim() dort an – so bekommt der      */
+/*  Eintragende nie seine eigene Nachricht, die anderen sehen seinen Namen.*/
+/* ====================================================================== */
+const DEVICE_ID = (() => {
+  let id = store.get("aemtli.device");
+  if (!id) {
+    try { id = crypto.randomUUID(); }
+    catch (_) { id = "d" + Date.now().toString(36) + Math.random().toString(36).slice(2, 12); }
+    store.set("aemtli.device", id);
+  }
+  return id;
+})();
+const pushAvailable = () => !!(ADDON && !UNDER_INGRESS && window.isSecureContext && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window);
+const pushUser = () => { const u = state.user; return String((u && (u.display_name || u.username)) || store.get("aemtli.user") || "").trim(); };
+function createdId(res) { return res && res.created_object_id != null ? num(res.created_object_id) : null; }
+function b64urlToBytes(s) {
+  const b = atob(String(s).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(s).length / 4) * 4, "="));
+  return Uint8Array.from(b, (c) => c.charCodeAt(0));
+}
+
+/* fetch gegen den Push-Dienst des Add-ons (relativer Pfad "push/…", wie "grocy/…").
+   Fehler wie bei api(): ApiError mit status/detail und den Flags offline/timeout/notJson. */
+async function pushApi(path, { method = "GET", body, key = CFG.key, timeout } = {}) {
+  if (!key) throw new ApiError(0, "Nicht konfiguriert", { notConfigured: true });
+  if (method !== "GET" && navigator.onLine === false) throw new ApiError(0, "offline", { offline: true });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout || 15000);
+  let res;
+  try {
+    res = await fetch(new URL("push/" + path, document.baseURI).href, {
+      method,
+      headers: { "GROCY-API-KEY": key, Accept: "application/json", ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      cache: "no-store", credentials: "same-origin", signal: ctrl.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    const aborted = !!(e && e.name === "AbortError");
+    const err = new ApiError(0, aborted ? "Zeitüberschreitung" : "Netzwerkfehler", { offline: navigator.onLine === false, timeout: aborted });
+    DIAG.push({ kind: "push", path: "push/" + path, msg: err.detail });
+    throw err;
+  }
+  clearTimeout(timer);
+  const txt = await res.text();
+  let data = null;
+  if (txt) { try { data = JSON.parse(txt); } catch (_) { data = null; } }
+  if (!res.ok) {
+    const err = new ApiError(res.status, data && (data.error_message || data.message) || "", { fromPush: true, bodyHint: data ? "" : txt.slice(0, 120) });
+    DIAG.push({ kind: "push", status: res.status, path: "push/" + path, msg: err.detail || err.bodyHint });
+    throw err;
+  }
+  if (res.status === 204 || !txt) return null;
+  if (!data) {
+    const err = new ApiError(res.status, "Antwort ist kein JSON", { notJson: true, bodyHint: txt.slice(0, 120) });
+    DIAG.push({ kind: "push", status: res.status, path: "push/" + path, msg: err.bodyHint });
+    throw err;
+  }
+  return data;
+}
+// Fehlertext für Toasts: der Dienst hat eigene 400/404/503-Meldungen, 502/503 heißt hier nicht „Grocy“.
+function pushErrText(e) {
+  if (e instanceof ApiError && e.timeout) return "Der Benachrichtigungsdienst antwortet nicht (Zeitüberschreitung).";
+  if (e instanceof ApiError && e.status > 0) {
+    if (e.detail && [400, 404, 503].includes(e.status)) return e.detail;
+    if (e.status === 404) return "Diese Add-on-Version kennt noch keine Benachrichtigungen. Bitte Ämtli im Add-on-Store aktualisieren.";
+    if (e.status === 502 || e.status === 503 || e.status === 504) return "Der Benachrichtigungsdienst im Add-on antwortet nicht.";
+    return describeError(e);
+  }
+  if (e instanceof ApiError) return describeError(e);
+  if (e && e.message === "sw-timeout") return "Die App ist noch nicht bereit. Seite neu laden und nochmal versuchen.";
+  if (e && e.name === "NotAllowedError") return "Benachrichtigungen sind im Browser blockiert. Gib sie in den Seiten-Einstellungen frei.";
+  if (e && e.name === "AbortError") return "Der Push-Dienst deines Browsers ist nicht erreichbar. Mit Chrome über Google oder Safari auf dem Home-Bildschirm klappt es.";
+  return "Benachrichtigungen ließen sich nicht einrichten.";
+}
+
+/* Status des Dienstes: einmal pro Sitzung (Promise gemerkt), Fehler werden nicht gemerkt. */
+let pushStatusP = null, pushLast = null;
+function pushStatus(force = false) {
+  if (!pushStatusP || force) {
+    const p = pushApi("status").then((v) => { pushLast = v || { enabled: false }; return pushLast; });
+    pushStatusP = p;
+    p.catch(() => { if (pushStatusP === p) pushStatusP = null; });
+  }
+  return pushStatusP;
+}
+function swReady() {
+  return Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error("sw-timeout")), 10000))]);
+}
+const pushSig = () => `${isoDate(new Date())} ${CFG.listId} ${pushUser()}`;   // Datum + Liste + Name: ändert sich eins, wird neu gemeldet
+function pushKeyMatches(sub, bytes) {
+  try {
+    const k = sub.options && sub.options.applicationServerKey; if (!k) return false;
+    const a = new Uint8Array(k);
+    return a.length === bytes.length && a.every((v, i) => v === bytes[i]);
+  } catch (_) { return false; }
+}
+// Abo im Browser anlegen (ein vorhandenes mit passendem Schlüssel bleibt) und dem Dienst melden.
+async function pushSubscribe(st) {
+  const reg = await swReady();
+  const keyBytes = b64urlToBytes(st.publicKey);
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && !pushKeyMatches(sub, keyBytes)) { try { await sub.unsubscribe(); } catch (_) {} sub = null; }   // Dienstschlüssel hat gewechselt
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes });
+  await pushApi("subscribe", { method: "POST", body: { subscription: sub.toJSON(), device: DEVICE_ID, user: pushUser(), listId: CFG.listId } });
+  store.set("aemtli.push.synced", pushSig());
+}
+async function pushEnable() {
+  if (!CFG.configured) { toast("Erst deinen Schlüssel speichern.", { bad: true }); return false; }
+  try {
+    const perm = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+    if (perm !== "granted") {
+      CFG.push = false;
+      toast(perm === "denied" ? "Benachrichtigungen sind im Browser blockiert. Gib sie in den Seiten-Einstellungen frei." : "Ohne Erlaubnis kann Ämtli nichts melden.", { bad: true, duration: 6000 });
+      return false;
+    }
+    const st = await pushStatus(true);
+    if (!st.enabled) { CFG.push = false; toast(st.reason || "Push ist im Add-on nicht eingerichtet (Option grocy_api_key).", { bad: true, duration: 7000 }); return false; }
+    await pushSubscribe(st);
+    CFG.push = true;
+    toast("Benachrichtigungen an.");
+    return true;
+  } catch (e) {
+    CFG.push = false;
+    DIAG.push({ kind: "push", msg: "enable: " + (e && (e.detail || e.message || e.name) || e) });
+    toast(pushErrText(e), { bad: true, duration: 6000 });
+    return false;
+  }
+}
+async function pushDisable({ quiet = false } = {}) {
+  const key = CFG.key;                                     // vor dem ersten await lesen (Abmelden löscht ihn gleich)
+  CFG.push = false;
+  store.del("aemtli.push.synced"); store.del("aemtli.push.tried");
+  try {
+    const reg = await swReady();
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+  } catch (e) { DIAG.push({ kind: "push", msg: "unsubscribe: " + (e && (e.message || e.name) || e) }); }
+  try { await pushApi("subscribe", { method: "DELETE", body: { device: DEVICE_ID }, key }); }
+  catch (e) { DIAG.push({ kind: "push", msg: "abmelden: " + (e && (e.detail || e.message) || e) }); }
+  if (!quiet) toast("Benachrichtigungen aus.");
+}
+// Beim Start, höchstens 1× pro Tag: Abo und Namen beim Dienst auffrischen. Fehler nur in die Diagnose.
+let pushRefreshing = false;
+async function pushRefresh() {
+  if (pushRefreshing || !CFG.push || !CFG.configured || !pushAvailable() || navigator.onLine === false) return;
+  if (store.get("aemtli.push.synced") === pushSig() || store.get("aemtli.push.tried") === pushSig()) return;   // auch nach Fehlschlag nur 1× am Tag
+  pushRefreshing = true;
+  store.set("aemtli.push.tried", pushSig());
+  try {
+    if (Notification.permission !== "granted") { CFG.push = false; DIAG.push({ kind: "push", msg: "Erlaubnis fehlt, Schalter aus" }); return; }
+    const st = await pushStatus();
+    if (!st.enabled) { DIAG.push({ kind: "push", msg: "Dienst aus: " + (st.reason || "?") }); return; }
+    await pushSubscribe(st);
+  } catch (e) { DIAG.push({ kind: "push", msg: "refresh: " + (e && (e.detail || e.message || e.name) || e) }); }
+  finally { pushRefreshing = false; }
+}
+// Neue Listenzeile(n) dem Benutzer zuordnen. Läuft auch, wenn dieses Gerät selbst kein Push hat,
+// und auch unter HA-Ingress (dort gibt es keinen Service Worker, aber den Pfad push/ schon).
+function pushClaim(ids) {
+  try {
+    ids = (Array.isArray(ids) ? ids : [ids]).map(num).filter((n) => n > 0);
+    if (!ids.length || !ADDON || !CFG.configured) return;
+    const user = pushUser();
+    pushStatus().then((st) => (st && st.enabled ? pushApi("mine", { method: "POST", body: { ids, user } }) : null))
+      .catch((e) => DIAG.push({ kind: "push", msg: "mine: " + (e && (e.detail || e.message) || e) }));
+  } catch (e) { DIAG.push({ kind: "push", msg: "claim: " + (e && e.message || e) }); }
+}
+
+/* ---- Einstellungen: Karte „Benachrichtigungen“ ---- */
+function pushHintText() {
+  const sec = pushLast ? num(pushLast.batchSeconds) : 0;
+  const m = sec >= 60 ? Math.round(sec / 60) : 10;
+  return `Wenn jemand etwas auf die Liste setzt – gesammelt, höchstens ${m === 1 ? "einmal pro Minute" : "alle " + m + " Minuten"}. Nicht für das, was du selbst einträgst.`;
+}
+function pushStatusText() {
+  if (Notification.permission === "denied") return "Im Browser blockiert. In den Seiten-Einstellungen freigeben.";
+  if (pushLast && pushLast.enabled === false) return pushLast.reason || "Push ist im Add-on nicht eingerichtet.";
+  if (pushLast && pushLast.error) return pushLast.error;
+  return "";
+}
+function paintPushInfo() {
+  const h = $("#set-push-hint"), s = $("#set-push-status"); if (!h || !s) return;
+  h.textContent = pushHintText();
+  const t = pushStatusText();
+  s.hidden = !t; s.innerHTML = t ? `<span class="err">${esc(t)}</span>` : "";
+}
+function pushCardInner() {
+  return `<div class="field">
+      <label class="toggle"><input type="checkbox" id="set-push" ${CFG.push ? "checked" : ""} /><span class="t">Neues auf der Liste</span></label>
+      <span class="hint" id="set-push-hint"></span>
+      <span class="hint" id="set-push-status" hidden></span>
+      ${CFG.push ? `<div class="inline"><button type="button" class="btn btn-ghost btn-sm" id="set-push-test">Testnachricht</button></div>` : ""}
+    </div>`;
+}
+function pushCardHTML() {
+  if (!pushAvailable() || !CFG.configured) return "";
+  return `<h2 class="sect">Benachrichtigungen</h2><section class="card" id="set-push-card">${pushCardInner()}</section>`;
+}
+function wirePushCard() {
+  const t = $("#set-push"); if (t) t.addEventListener("change", onPushToggle);
+  const b = $("#set-push-test"); if (b) b.addEventListener("click", onPushTest);
+  paintPushInfo();
+}
+function repaintPushCard() {
+  const c = $("#set-push-card"); if (!c) return;
+  c.innerHTML = pushCardInner();
+  wirePushCard();
+}
+// Status des Dienstes beim Öffnen der Einstellungen frisch holen (Hinweistext und Fehlerzeile).
+async function pushCardFill() {
+  if (!$("#set-push-card") || !CFG.configured) return;
+  try { await pushStatus(true); }
+  catch (e) { pushLast = { ...(pushLast || {}), error: pushErrText(e) }; }
+  paintPushInfo();
+}
+async function onPushToggle(e) {
+  const box = e.target;
+  box.disabled = true;
+  try { if (box.checked) await pushEnable(); else await pushDisable(); }
+  catch (err) { DIAG.push({ kind: "push", msg: "toggle: " + (err && err.message || err) }); }
+  repaintPushCard();
+}
+async function onPushTest(e) {
+  const btn = e.currentTarget; btn.disabled = true;
+  try {
+    const r = await pushApi("test", { method: "POST", body: { device: DEVICE_ID }, timeout: 30000 });   // Dienst prüft Schlüssel + sendet: bis 25 s
+    if (r && r.ok) toast("Testnachricht ist raus. Sie sollte gleich ankommen.");
+    else toast((r && r.error_message) || "Die Testnachricht ging nicht raus.", { bad: true, duration: 6000 });
+  } catch (err) {
+    toast(pushErrText(err), { bad: true, duration: 6000 });
+  } finally { btn.disabled = false; }
 }
 
 /* ====================================================================== */
@@ -2484,7 +2734,7 @@ async function go(tab) {
   view.setAttribute("aria-busy", "true");
   try {
     if (tab === "shopping") { await loadShopping(); renderShopping(); repairJournal(); afterShoppingLoaded(); }
-    else { await loadChores(); state.fromCache = false; renderChores(); }
+    else { await loadChores(); state.fromCache = false; renderChores(); pushRefresh(); }
     setBanner("auth", null); setBanner("proxy", null);
     updateBadges();
   } catch (err) {
