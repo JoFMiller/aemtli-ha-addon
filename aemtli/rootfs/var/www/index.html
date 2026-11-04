@@ -7,8 +7,9 @@
   <meta name="description" content="Einkaufszettel & Hausarbeiten – schlanke Oberfläche für Grocy" />
 
   <link rel="manifest" href="manifest.webmanifest" />
-  <meta name="theme-color" content="#F2F6EF" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#111915" media="(prefers-color-scheme: dark)" />
+  <!-- Eine theme-color, die boot.js/applyTheme passend zum Thema setzen (Status-/Navigationsleiste
+       der installierten App). Zwei Varianten mit media= hat Chrome in der WebAPK nicht zuverlässig beachtet. -->
+  <meta name="theme-color" content="#F2F6EF" />
   <meta name="color-scheme" content="light dark" />
 
   <!-- PWA / iOS -->

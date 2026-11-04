@@ -6,10 +6,15 @@
    3) Start-Wächter: Hat app.js nach dem Laden nichts gerendert, zeigt die Seite selbst,
       was schiefging (Skript nicht ausgeführt, Fehler, CSP) – ohne Entwicklerwerkzeuge. */
 (function () {
+  var t = null;
+  try { t = localStorage.getItem("aemtli.theme"); } catch (_) { /* Speicher gesperrt – Systemeinstellung gilt */ }
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  // theme-color sofort passend setzen, sonst färbt Android die Leisten der installierten App hell.
   try {
-    var t = localStorage.getItem("aemtli.theme");
-    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-  } catch (_) { /* Speicher gesperrt – Systemeinstellung gilt */ }
+    var dark = t === "dark" || (t !== "light" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.setAttribute("content", dark ? "#111915" : "#F2F6EF");
+  } catch (_) {}
 
   var p = location.pathname;
   if (p && !/\/$/.test(p) && !/\.[a-z0-9]{1,5}$/i.test(p)) {

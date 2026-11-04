@@ -3,7 +3,7 @@
    damit geänderte index.html/app.js sofort ankommen. Fehlerantworten werden nie
    gecacht. Der Grocy-Proxy (/grocy/) und fremde Origins werden nicht angefasst.
    Seit 2.3 zeigt er außerdem Web-Push-Nachrichten „Neues auf der Liste“ an. */
-const CACHE = "aemtli-v7";
+const CACHE = "aemtli-v8";
 const SHELL = [
   "./",
   "./index.html",
@@ -14,6 +14,7 @@ const SHELL = [
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
+  "./icons/badge-96.png",
 ];
 
 self.addEventListener("install", (e) => {
@@ -93,7 +94,7 @@ self.addEventListener("push", (e) => {
       tag: d.tag || "aemtli",
       renotify: true,                       // gleicher Tag ersetzt die alte Nachricht – trotzdem hörbar
       icon: "./icons/icon-192.png",
-      badge: "./icons/icon-192.png",
+      badge: "./icons/badge-96.png",   // Statusleiste: Android nimmt nur den Alphakanal → weiße Silhouette ohne Hintergrund
       data: { url: d.url || "./" },
     })
   );

@@ -184,6 +184,10 @@ function applyTheme() {
   const t = CFG.theme;
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
   else document.documentElement.removeAttribute("data-theme");
+  // Status-/Navigationsleiste der installierten App folgen dem wirksamen Thema (wie in boot.js).
+  const dark = t === "dark" || (t !== "light" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const m = document.querySelector('meta[name="theme-color"]');
+  if (m) m.setAttribute("content", dark ? "#111915" : "#F2F6EF");
 }
 
 /* ---------------------------------------------------------------- Toast */
@@ -2825,6 +2829,8 @@ function wire() {
   });
   window.addEventListener("offline", reflectOnline);
   window.addEventListener("online", () => { reflectOnline(); refresh({ quiet: true }); });
+  // Systemthema wechselt (Tag/Nacht): theme-color nachziehen.
+  if (window.matchMedia) { try { window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme); } catch (_) {} }
 }
 function onUncaught(e) {
   const msg = e && (e.message || (e.reason && e.reason.message)) || String(e);

@@ -7,7 +7,7 @@
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "background_color": "#F2F6EF",
-  "theme_color": "#F2F6EF",
+  "theme_color": "#111915",
   "lang": "de",
   "categories": ["lifestyle", "productivity", "utilities"],
   "icons": [
