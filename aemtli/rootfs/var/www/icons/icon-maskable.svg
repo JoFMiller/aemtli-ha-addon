@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<!-- Ämtli – maskable: volle Fläche, Motiv in der sicheren Zone (mittlere 80 %). -->
+<rect width="512" height="512" fill="#2E9E63"/>
+<g fill="none" stroke="#FFFFFF" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"><path d="M150 232h212l-24 118a26 26 0 0 1-25 20H199a26 26 0 0 1-25-20z"/><path d="M198 232l38-72M314 232l-38-72"/><path d="M214 292l30 30 56-56"/></g>
+</svg>
